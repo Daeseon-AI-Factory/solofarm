@@ -1,0 +1,32 @@
+[project]
+name = "factory-core"
+version = "0.1.0"
+description = "Shared CORE_CANDIDATE modules — AI, STT, auth, storage, payment, external APIs. Reusable across all products in this monorepo."
+requires-python = ">=3.11"
+dependencies = [
+    # Config
+    "pydantic-settings>=2.0.0",
+    # AI / STT
+    "anthropic>=0.42.0",
+    "openai>=1.60.0",
+    # HTTP — used by external_api, auth/kakao, payment/toss
+    "httpx>=0.28.0",
+    # Auth (JWT)
+    "python-jose[cryptography]>=3.3.0",
+    # Storage
+    "supabase>=2.0.0",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["core*"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]

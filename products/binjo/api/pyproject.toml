@@ -1,0 +1,58 @@
+[project]
+name = "binjo-api"
+version = "0.1.0"
+description = "BINJO Farm Management API — voice farm diary, AI parsing, PDF export"
+requires-python = ">=3.11"
+# Depends on factory-core (the shared package at the repo root).
+# Install order from a fresh venv:
+#   pip install -e ../../..       # installs factory-core (provides core/ai, core/stt, etc.)
+#   pip install -e .              # installs binjo-api
+dependencies = [
+    "factory-core",
+    # Web framework
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "python-multipart>=0.0.18",
+    # DB (BINJO-specific)
+    "sqlalchemy[asyncio]>=2.0.0",
+    "asyncpg>=0.30.0",
+    "alembic>=1.14.0",
+    # Validation
+    "pydantic>=2.0.0",
+    # Queue
+    "celery[redis]>=5.4.0",
+    "redis>=5.0.0",
+    # Phase 3: Receipt image processing
+    "Pillow>=10.0.0",
+    "pillow-heif>=0.18.0",
+    # Phase 3: Financial report charts
+    "matplotlib>=3.8.0",
+    # Phase 2: PDF generation (영농일지)
+    "reportlab>=4.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.8.0",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+# Auto-discovery can't pick between app/ and workers/ — declare them explicitly.
+# alembic/ is migrations loaded by Alembic at runtime, not a Python import package.
+[tool.setuptools.packages.find]
+include = ["app*", "workers*"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

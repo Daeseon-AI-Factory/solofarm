@@ -95,14 +95,16 @@ One-click export of farm logs in the format required by Korean agricultural agen
 
 ```bash
 # Frontend
-cd binjo
+cd products/binjo/web
 npm install
 cp .env.example .env.local   # Configure Supabase + API keys
 npm run dev                   # → localhost:3000
 
-# Backend
-cd binjo-api
-pip install -e .
+# Backend (from repo root)
+python -m venv .venv && source .venv/bin/activate
+pip install -e .              # installs factory-core (shared modules in core/)
+pip install -e products/binjo/api
+cd products/binjo/api
 cp .env.example .env          # Configure DB + AI API keys
 alembic upgrade head          # Run migrations
 uvicorn app.main:app --port 8002 --reload

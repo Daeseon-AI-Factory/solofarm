@@ -106,48 +106,74 @@ This is the first product of the AI Product Factory. Every reusable module becom
 
 ---
 
-## Project Structure (Phase 1)
+## Project Structure (Monorepo Factory)
 
 ```
-binjo/
-├── src/
-│   ├── app/
-│   │   ├── layout.tsx              # Root layout + Korean font + OG tags
-│   │   ├── page.tsx                # Brand page (7 sections)
-│   │   ├── globals.css
-│   │   ├── admin/                  # Admin panel pages
-│   │   └── api/                    # API routes (v1 + admin)
-│   ├── components/
-│   │   ├── brand/                  # Brand page section components
-│   │   ├── admin/                  # Admin components
-│   │   └── ui/                     # Shared UI primitives
-│   ├── lib/
-│   │   ├── db.ts                   # Prisma client singleton
-│   │   ├── supabase.ts             # Supabase Storage client only
-│   │   ├── auth.ts                 # JWT helper for admin
-│   │   └── image.ts               # Image upload helper (via Supabase Storage)
-│   └── types/
-│       └── index.ts
-├── prisma/
-│   ├── schema.prisma
-│   └── seed.ts
-├── public/
-├── docs/                           # All spec documents
+solofarm/                              # Repo root
+├── pyproject.toml                     # factory-core package (shared modules)
+├── core/                              # Importable as `core` (CORE_CANDIDATE modules)
+│   ├── config.py                      # CoreSettings — shared env vars
+│   ├── ai/                            # LLMProvider + ClaudeProvider
+│   ├── stt/                           # Whisper + post-processor
+│   ├── auth/                          # JWT + Kakao OAuth
+│   ├── storage/                       # Supabase Storage client
+│   ├── payment/                       # PaymentProvider + Toss (Stripe to come)
+│   └── external_api/                  # Weather (KMA), etc.
+│
+├── products/                          # One subdir per product. All siblings.
+│   └── binjo/                         # Apple farm management (Phase 1-4)
+│       ├── api/                       # FastAPI backend
+│       │   ├── pyproject.toml         # depends on factory-core
+│       │   ├── app/
+│       │   │   ├── config.py          # extends CoreSettings with BINJO-only fields
+│       │   │   ├── main.py
+│       │   │   ├── database.py
+│       │   │   ├── dependencies.py
+│       │   │   ├── api/               # FastAPI endpoints
+│       │   │   ├── modules/           # BINJO-specific: farm_log, bookkeeping, orders, intelligence
+│       │   │   ├── models/            # SQLAlchemy models
+│       │   │   ├── schemas/           # Pydantic schemas
+│       │   │   ├── data/              # Static data (pesticide DB)
+│       │   │   └── services/
+│       │   ├── alembic/               # DB migrations
+│       │   ├── workers/               # Celery tasks
+│       │   └── Dockerfile             # build context = repo root (see docker-compose)
+│       └── web/                       # Next.js frontend
+│           ├── package.json
+│           ├── app/                   # App Router pages (brand, farmer portal, admin)
+│           ├── components/
+│           ├── lib/
+│           └── prisma/
+│
+├── docs/                              # Specs (currently BINJO-only; new products get their own subdir)
 │   ├── spec.md
 │   ├── architecture.md
 │   ├── phase1-brand-page.md
 │   ├── phase2-voice-farm.md
 │   ├── phase3-bookkeeping.md
 │   └── phase4-orders-intel.md
+│
+├── docker-compose.yml                 # api context = repo root (needs to bundle core/)
+├── vercel.json                        # rootDirectory = products/binjo/web
 ├── CLAUDE.md
-├── .env.example
-├── .gitignore
-├── next.config.js
-├── tailwind.config.ts
-├── tsconfig.json
-├── package.json
 └── README.md
 ```
+
+### Setup from a fresh venv
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -e .                         # installs factory-core (provides core/*)
+pip install -e products/binjo/api        # installs binjo-api
+cd products/binjo/api && uvicorn app.main:app --reload
+```
+
+### Adding a new product
+
+1. `mkdir -p products/<name>/{api,web}`
+2. Copy `products/binjo/api/pyproject.toml` as a template — keep `factory-core` dependency, drop BINJO-only deps you won't use.
+3. In the new product's `app/config.py`, extend `CoreSettings` from `core.config`.
+4. Customization belongs in **data/templates** (YAML, JSON, prompt files), NEVER in `if product_type == "..."` branches in code.
 
 ---
 
@@ -173,16 +199,18 @@ binjo/
 ## Module Dependency Rule
 
 ```
-app/core/     ← depends on nothing product-specific
-    ↑
-app/services/ ← depends on core
-    ↑
-app/api/      ← depends on services and core
-    ↑
-app/modules/  ← product-specific, can depend on anything above
+core/                       ← depends on nothing product-specific (top-level)
+  ↑
+products/<name>/api/app/services/  ← depends on core
+  ↑
+products/<name>/api/app/api/       ← depends on services and core
+  ↑
+products/<name>/api/app/modules/   ← product-specific, can depend on anything above
 ```
 
-Core NEVER imports from modules.
+**Core NEVER imports from products.** Verify with: `grep -r "from products" core/` should return zero hits.
+
+Core imports the shared `core.config.CoreSettings`. Products extend it in their own `app/config.py`.
 
 ---
 
