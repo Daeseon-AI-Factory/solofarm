@@ -1,0 +1,30 @@
+@import "tailwindcss";
+
+:root {
+  /* Warm cafe palette — espresso brown + cream + soft accent */
+  --color-bg: #FBF7F2;
+  --color-surface: #FFFFFF;
+  --color-text: #1F1B17;
+  --color-text-secondary: #5C534B;
+  --color-text-muted: #9B9189;
+  --color-border: #E8DFD3;
+  --color-primary: #4A2C1A;        /* espresso */
+  --color-primary-light: #6B4329;
+  --color-accent: #C77B3A;         /* warm caramel */
+  --color-accent-soft: #F0D9B5;
+  --color-success: #4A7C2E;
+  --color-warning: #C77B3A;
+  --color-danger: #B23A2E;
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo',
+    'Pretendard Variable', Pretendard, 'Noto Sans KR', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+html {
+  scroll-behavior: smooth;
+}

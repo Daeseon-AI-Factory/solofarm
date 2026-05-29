@@ -1,0 +1,33 @@
+# Cafe industry profile — extra hints layered onto the base inference prompt
+# when industry_hint == "cafe". The core inference prompt is industry-agnostic;
+# this file is data, never code.
+#
+# Schema:
+#   terminology_hints: phrases the AI should recognize without translation
+#   common_verification_patterns: heuristics for when to suggest photo vs voice vs none
+#   common_clarifying_questions: questions the AI may surface if the owner skipped them
+
+terminology_hints:
+  - 마감조 / closing shift = end-of-day workflow
+  - 오픈조 / opening shift = start-of-day workflow
+  - 에스프레소 머신 = primary equipment, always needs cleaning
+  - 그라인더 = espresso grinder, usually cleaned with the machine
+  - 우유 거품기 / 스팀 완드 = milk steam wand, food-safety relevant
+  - 원두 / beans = primary perishable, daily stock check
+  - 시럽 / syrup = secondary perishable, weekly stock check
+  - 매출 정산 = cash + card sales reconciliation, end-of-shift
+  - 재고 카운트 = inventory count, end-of-shift or weekly
+
+common_verification_patterns:
+  - cleaning espresso machine → photo verification (residue check)
+  - mopping floor → photo verification (spills/debris check)
+  - milk wand cleaning → photo verification (food safety)
+  - cash/card reconciliation → voice capture (cash_total_krw, card_total_krw)
+  - inventory count → voice capture (per-item remaining quantity)
+  - locking up → none (worker self-confirms)
+
+common_clarifying_questions:
+  - "현금 정산할 때 영수증 합계와도 대조하시나요?"
+  - "재고 카운트할 때 원두/우유/시럽 외에 다른 부재료(시럽, 휘핑크림 등)도 보시나요?"
+  - "마감 시간이 가게 영업 종료 시각인가요, 아니면 청소까지 마친 시각인가요?"
+  - "냉장고 온도 체크가 매일 필요한지, 주간 점검인지 알려주세요."

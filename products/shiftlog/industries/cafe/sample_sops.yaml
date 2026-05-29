@@ -1,0 +1,27 @@
+# Seed examples — shown to owners as starting points when they say
+# "이런 거 뭐 만들 수 있어?". Each is a fully-formed WorkflowDefinition
+# the owner can pick and customize.
+
+closing_shift:
+  name: "마감조 작업"
+  description: "카페 마감 시 청소, 매출 정산, 재고 확인 후 가게 잠그기"
+  estimated_duration_minutes: 30
+  steps:
+    - { order: 1, name: "카운터 위 정리", description: "컵, 영수증, 메뉴판 정리", duration_estimate_minutes: 3, verification: { type: none } }
+    - { order: 2, name: "에스프레소 머신 청소", description: "표면 + 트레이", duration_estimate_minutes: 10, verification: { type: photo, ai_check: "머신 표면에 커피 잔여물 없음" } }
+    - { order: 3, name: "바닥 청소", description: "객장 바닥 음료 자국 제거", duration_estimate_minutes: 5, verification: { type: photo, ai_check: "바닥에 음료 자국이나 부스러기 없음" } }
+    - { order: 4, name: "매출 정산", description: "현금 + 카드 매출 합산", duration_estimate_minutes: 5, verification: { type: voice, captures: [cash_total_krw, card_total_krw] } }
+    - { order: 5, name: "재고 확인", description: "원두/우유/시럽 남은 양", duration_estimate_minutes: 4, verification: { type: voice, captures: [beans_remaining, milk_remaining, syrup_remaining] } }
+    - { order: 6, name: "불 끄고 문 잠그기", description: "조명/전자기기/시건", duration_estimate_minutes: 1, verification: { type: none } }
+
+opening_shift:
+  name: "오픈조 작업"
+  description: "카페 오픈 전 머신 예열, 재고 세팅, 청결 확인"
+  estimated_duration_minutes: 25
+  steps:
+    - { order: 1, name: "문 열고 조명 켜기", description: "출입문 열고 전체 조명 on", duration_estimate_minutes: 1, verification: { type: none } }
+    - { order: 2, name: "에스프레소 머신 예열", description: "전원 켜고 데우기 시작", duration_estimate_minutes: 2, verification: { type: none } }
+    - { order: 3, name: "냉장고 온도 체크", description: "온도계 또는 디스플레이 확인 후 음성 보고", duration_estimate_minutes: 1, verification: { type: voice, captures: [fridge_temp_celsius] } }
+    - { order: 4, name: "원두/우유 재고 보충", description: "부족분 백 룸에서 가져와 채우기", duration_estimate_minutes: 5, verification: { type: photo, ai_check: "그라인더 호퍼에 원두가 가득 차 있음" } }
+    - { order: 5, name: "카운터/객장 정리", description: "전날 못 한 부분 마무리, 의자 정돈", duration_estimate_minutes: 5, verification: { type: photo, ai_check: "카운터와 객장이 정돈된 상태" } }
+    - { order: 6, name: "POS 켜고 영업 시작", description: "POS 켜고 시간대 기록", duration_estimate_minutes: 1, verification: { type: none } }
