@@ -8,19 +8,18 @@ Weather is auto-filled from 기상청 API on creation if not already present.
 
 import logging
 from datetime import date
-from uuid import UUID
 
+from core.external_api.weather_kma import format_weather_summary, get_weather_for_date
+from core.storage.file_manager import delete_farm_photo, upload_farm_photo
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from core.external_api.weather_kma import format_weather_summary, get_weather_for_date
 from app.database import get_db
 from app.dependencies import get_current_farmer
 from app.models.farm_log import ChemicalUsage, FarmLog, FarmLogTask
 from app.models.farmer import Farmer
-from core.storage.file_manager import delete_farm_photo, upload_farm_photo
 from app.schemas.farm_log import (
     ChemicalResponse,
     FarmLogCreate,
@@ -59,6 +58,7 @@ def _log_to_response(log: FarmLog) -> FarmLogResponse:
                 type=c.type,
                 name=c.name,
                 amount=c.amount,
+                dilution_ratio=c.dilution_ratio,
                 action=c.action,
             )
             for c in log.chemicals
@@ -117,6 +117,22 @@ async def create_farm_log(
     db: AsyncSession = Depends(get_db),
 ) -> FarmLogResponse:
     """Create a new farm log — from voice pipeline result or manual entry."""
+    if body.voice_recording_id is not None:
+        # A browser can lose the response after the transaction commits. Reusing
+        # the recording ID makes a sequential retry return the existing row
+        # instead of creating a duplicate draft.
+        existing_result = await db.execute(
+            select(FarmLog)
+            .where(
+                FarmLog.farmer_id == farmer.id,
+                FarmLog.voice_recording_id == body.voice_recording_id,
+            )
+            .options(selectinload(FarmLog.tasks), selectinload(FarmLog.chemicals))
+        )
+        existing_log = existing_result.scalar_one_or_none()
+        if existing_log is not None:
+            return _log_to_response(existing_log)
+
     # Auto-fill official weather if not already provided
     # Best-effort: if KMA API fails, we still create the log without it
     weather_official = None
@@ -131,7 +147,7 @@ async def create_farm_log(
     log = FarmLog(
         farm_id=farmer.farm_id or farmer.id,  # fallback if farm_id not set
         farmer_id=farmer.id,
-        voice_recording_id=UUID(body.voice_recording_id) if body.voice_recording_id else None,
+        voice_recording_id=body.voice_recording_id,
         log_date=body.log_date,
         crop=body.crop,
         weather_official=weather_official,
@@ -144,24 +160,29 @@ async def create_farm_log(
 
     # Create task entries
     for i, task in enumerate(body.tasks):
-        db.add(FarmLogTask(
-            farm_log_id=log.id,
-            field_name=task.field_name,
-            stage=task.stage,
-            detail=task.detail,
-            duration_hours=task.duration_hours,
-            sort_order=i,
-        ))
+        db.add(
+            FarmLogTask(
+                farm_log_id=log.id,
+                field_name=task.field_name,
+                stage=task.stage,
+                detail=task.detail,
+                duration_hours=task.duration_hours,
+                sort_order=i,
+            )
+        )
 
     # Create chemical entries
     for chem in body.chemicals:
-        db.add(ChemicalUsage(
-            farm_log_id=log.id,
-            type=chem.type,
-            name=chem.name,
-            amount=chem.amount,
-            action=chem.action,
-        ))
+        db.add(
+            ChemicalUsage(
+                farm_log_id=log.id,
+                type=chem.type,
+                name=chem.name,
+                amount=chem.amount,
+                dilution_ratio=chem.dilution_ratio,
+                action=chem.action,
+            )
+        )
 
     await db.commit()
 
@@ -236,35 +257,43 @@ async def update_farm_log(
             await db.delete(task)
         # Create new tasks
         for i, task in enumerate(body.tasks):
-            db.add(FarmLogTask(
-                farm_log_id=log.id,
-                field_name=task.field_name,
-                stage=task.stage,
-                detail=task.detail,
-                duration_hours=task.duration_hours,
-                sort_order=i,
-            ))
+            db.add(
+                FarmLogTask(
+                    farm_log_id=log.id,
+                    field_name=task.field_name,
+                    stage=task.stage,
+                    detail=task.detail,
+                    duration_hours=task.duration_hours,
+                    sort_order=i,
+                )
+            )
 
     # Replace chemicals if provided
     if body.chemicals is not None:
         for chem in log.chemicals:
             await db.delete(chem)
         for chem in body.chemicals:
-            db.add(ChemicalUsage(
-                farm_log_id=log.id,
-                type=chem.type,
-                name=chem.name,
-                amount=chem.amount,
-                action=chem.action,
-            ))
+            db.add(
+                ChemicalUsage(
+                    farm_log_id=log.id,
+                    type=chem.type,
+                    name=chem.name,
+                    amount=chem.amount,
+                    dilution_ratio=chem.dilution_ratio,
+                    action=chem.action,
+                )
+            )
 
     await db.commit()
 
-    # Re-fetch
+    # Re-fetch. The identity map still holds the relationships loaded before
+    # their delete-and-recreate replacement, so force those collections to be
+    # overwritten with the committed rows.
     result = await db.execute(
         select(FarmLog)
         .where(FarmLog.id == log.id)
         .options(selectinload(FarmLog.tasks), selectinload(FarmLog.chemicals))
+        .execution_options(populate_existing=True)
     )
     log = result.scalar_one()
     return _log_to_response(log)
@@ -291,20 +320,27 @@ async def confirm_farm_log(
         )
 
     if log.status == "confirmed":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "ALREADY_CONFIRMED", "message": "이미 확인된 기록입니다"},
-        )
+        return _log_to_response(log)
 
     log.status = "confirmed"
     await db.commit()
 
-    return _log_to_response(log)
+    # `updated_at` is database-generated on UPDATE and SQLAlchemy expires that
+    # attribute after the commit. Re-fetch inside the async session so response
+    # serialization never triggers implicit IO and MissingGreenlet.
+    confirmed_result = await db.execute(
+        select(FarmLog)
+        .where(FarmLog.id == log.id)
+        .options(selectinload(FarmLog.tasks), selectinload(FarmLog.chemicals))
+    )
+    confirmed_log = confirmed_result.scalar_one()
+    return _log_to_response(confirmed_log)
 
 
 @router.delete("/{log_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_farm_log(
     log_id: str,
+    draft_only: bool = Query(False, description="Delete only while the log is still a draft"),
     farmer: Farmer = Depends(get_current_farmer),
     db: AsyncSession = Depends(get_db),
 ) -> None:
@@ -320,8 +356,19 @@ async def delete_farm_log(
             detail={"code": "NOT_FOUND", "message": "기록을 찾을 수 없습니다"},
         )
 
+    if draft_only and log.status != "draft":
+        # Confirmation may have committed even when its HTTP response was lost.
+        # A retry/discard flow must never delete that now-confirmed record.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "STATUS_CHANGED",
+                "message": "이미 확인된 기록이라 삭제하지 않았습니다. 기록 목록을 확인해주세요.",
+            },
+        )
+
     # Clean up photos from Supabase Storage before deleting from DB
-    for url in (log.photo_urls or []):
+    for url in log.photo_urls or []:
         try:
             await delete_farm_photo(url)
         except Exception as e:
@@ -373,7 +420,10 @@ async def upload_photos(
         if content_type not in ALLOWED_PHOTO_TYPES:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"code": "INVALID_TYPE", "message": f"지원하지 않는 파일 형식입니다: {content_type}"},
+                detail={
+                    "code": "INVALID_TYPE",
+                    "message": f"지원하지 않는 파일 형식입니다: {content_type}",
+                },
             )
 
         image_bytes = await file.read()
@@ -446,8 +496,9 @@ async def _convert_heic(image_bytes: bytes) -> tuple[bytes, str]:
     """Convert HEIC/HEIF to JPEG — iPhones shoot HEIC by default."""
     try:
         import io
-        from PIL import Image
+
         import pillow_heif
+        from PIL import Image
 
         pillow_heif.register_heif_opener()
         img = Image.open(io.BytesIO(image_bytes))

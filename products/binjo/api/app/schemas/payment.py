@@ -1,34 +1,36 @@
 """Pydantic schemas for payment and checkout endpoints."""
 
 from datetime import datetime
+from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class CheckoutRequest(BaseModel):
     """
     Public checkout — customer creates an order before payment.
 
-    Collects product selection + shipping info in one step.
-    The brand page sends this, we create SalesOrder + Shipping + Payment records,
-    then return the toss_order_id for the frontend SDK to initiate payment.
+    Collects product selection + shipping info in one step. Product names and
+    prices are deliberately absent because the server resolves them from the
+    shared product catalog before creating an order.
     """
 
+    # Reject legacy price fields instead of silently accepting a request that
+    # could make the caller believe its client-calculated amount was trusted.
+    model_config = ConfigDict(extra="forbid")
+
     # Product
-    product_id: str | None = None
-    product_name: str
-    quantity: int = Field(default=1, ge=1)
-    weight_option: str | None = None
-    unit_price: int = Field(ge=0)
-    total_amount: int = Field(gt=0)
+    product_id: UUID
+    quantity: int = Field(default=1, ge=1, le=20)
+    weight_option: str = Field(min_length=1, max_length=50)
 
     # Shipping
-    recipient_name: str
-    recipient_phone: str
-    postal_code: str | None = None
-    address: str
-    address_detail: str | None = None
-    delivery_message: str | None = None
+    recipient_name: str = Field(min_length=1, max_length=100)
+    recipient_phone: str = Field(min_length=1, max_length=20)
+    postal_code: str | None = Field(default=None, max_length=10)
+    address: str = Field(min_length=1, max_length=500)
+    address_detail: str | None = Field(default=None, max_length=200)
+    delivery_message: str | None = Field(default=None, max_length=500)
 
 
 class CheckoutResponse(BaseModel):

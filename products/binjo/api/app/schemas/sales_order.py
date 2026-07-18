@@ -2,9 +2,30 @@
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+
+CustomerName = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=100),
+]
+CustomerPhone = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=7, max_length=20),
+]
+CustomerAddress = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=2, max_length=1000),
+]
+ProductName = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=100),
+]
+WeightOption = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=50),
+]
 
 
 class SalesOrderCreate(BaseModel):
@@ -21,6 +42,40 @@ class SalesOrderCreate(BaseModel):
     unit_price: Decimal | None = Field(default=None, ge=0)
     total_amount: Decimal | None = Field(default=None, ge=0)
     notes: str | None = None
+
+
+class ManualOrderCreate(BaseModel):
+    """Create an already-confirmed order paid or agreed outside the app."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    channel: Literal["kakao", "phone", "offline"]
+    customer_name: CustomerName
+    customer_phone: CustomerPhone
+    customer_address: CustomerAddress
+    product_name: ProductName
+    quantity: int = Field(gt=0, le=1000)
+    weight_option: WeightOption
+    unit_price: Decimal = Field(
+        gt=0,
+        le=Decimal("9999999999"),
+        multiple_of=Decimal("1"),
+    )
+    total_amount: Decimal = Field(
+        gt=0,
+        le=Decimal("999999999999"),
+        multiple_of=Decimal("1"),
+    )
+    notes: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("notes")
+    @classmethod
+    def normalize_notes(cls, value: str | None) -> str | None:
+        """Store an empty notes field as null instead of meaningless whitespace."""
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
 
 class SalesOrderUpdate(BaseModel):

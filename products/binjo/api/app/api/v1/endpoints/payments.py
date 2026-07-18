@@ -12,15 +12,14 @@ NO authentication — these are public-facing for customer use.
 """
 
 import logging
-from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Request, status
+from core.payment.toss_provider import TossPaymentError, TossProvider
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import Depends
 
+from app.config import settings
 from app.database import get_db
-from core.payment.toss_provider import TossPaymentError, TossProvider
 from app.models.payment import Payment
 from app.models.sales_order import SalesOrder
 from app.models.shipping import Shipping
@@ -33,35 +32,27 @@ from app.schemas.payment import (
     PaymentConfirmRequest,
     PaymentResponse,
 )
+from app.services.farm_identity import (
+    SingleFarmResolutionError,
+    resolve_single_farm_id,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Single farm MVP — hardcoded farm_id for Binjo Farm
-# TODO: Make this configurable or derive from URL/subdomain when multi-farm
-_BINJO_FARM_ID: UUID | None = None
 
-
-async def _get_farm_id(db: AsyncSession) -> UUID:
-    """
-    Get the single farm's ID.
-
-    Cached after first call. For a single-farm MVP, querying the farm table
-    is overkill, but it avoids hardcoding a UUID that changes per environment.
-    """
-    global _BINJO_FARM_ID
-    if _BINJO_FARM_ID is None:
-        from sqlalchemy import text
-        result = await db.execute(text("SELECT id FROM farm LIMIT 1"))
-        row = result.first()
-        if row is None:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"code": "NO_FARM", "message": "농장 정보를 찾을 수 없습니다"},
-            )
-        _BINJO_FARM_ID = row[0]
-    return _BINJO_FARM_ID
+def _require_direct_checkout_enabled() -> None:
+    """Close every payment mutation while the external flow is not launch-ready."""
+    if settings.enable_direct_checkout:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail={
+            "code": "CHECKOUT_UNAVAILABLE",
+            "message": "온라인 결제는 현재 준비 중입니다",
+        },
+    )
 
 
 @router.post("/checkout", response_model=CheckoutResponse, status_code=status.HTTP_201_CREATED)
@@ -75,7 +66,19 @@ async def checkout(
     The frontend uses the returned toss_order_id and amount to initialize
     the TossPayments JavaScript SDK widget.
     """
-    farm_id = await _get_farm_id(db)
+    _require_direct_checkout_enabled()
+
+    try:
+        farm_id = await resolve_single_farm_id(db)
+    except SingleFarmResolutionError as exc:
+        logger.error("Cannot start checkout: expected one farm, found %d", exc.farm_count)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "FARM_CONFIGURATION_ERROR",
+                "message": "농장 연결 설정을 확인해주세요",
+            },
+        ) from exc
     return await create_checkout(db, body, farm_id)
 
 
@@ -93,6 +96,7 @@ async def confirm(
 
     Idempotent — calling this twice with the same paymentKey returns success.
     """
+    _require_direct_checkout_enabled()
     toss = TossProvider()
     try:
         payment = await confirm_payment(db, body, toss)
@@ -165,6 +169,7 @@ async def toss_webhook(
     Handles async payment events (virtual account deposits, cancellations).
     Must return 200 quickly — Toss retries on non-200 responses.
     """
+    _require_direct_checkout_enabled()
     body = await request.body()
 
     # Verify webhook signature

@@ -1,6 +1,7 @@
 """Pydantic schemas for farm log endpoints."""
 
 from datetime import date, datetime
+from uuid import UUID
 
 from pydantic import BaseModel
 
@@ -16,12 +17,14 @@ class ChemicalCreate(BaseModel):
     type: str  # "농약" | "비료"
     name: str
     amount: str | None = None
+    dilution_ratio: str | None = None
     action: str = "사용"
 
 
 class FarmLogCreate(BaseModel):
     """Create a farm log — either from voice pipeline or manual entry."""
-    voice_recording_id: str | None = None
+
+    voice_recording_id: UUID | None = None
     log_date: date
     crop: str = "사과"
     tasks: list[TaskCreate]
@@ -32,6 +35,7 @@ class FarmLogCreate(BaseModel):
 
 class FarmLogUpdate(BaseModel):
     """Update a farm log — farmer edits parsed data before confirming."""
+
     log_date: date | None = None
     crop: str | None = None
     tasks: list[TaskCreate] | None = None
@@ -53,6 +57,7 @@ class ChemicalResponse(BaseModel):
     type: str
     name: str
     amount: str | None
+    dilution_ratio: str | None = None
     action: str
 
 

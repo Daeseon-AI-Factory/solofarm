@@ -14,10 +14,7 @@ Each stage updates the VoiceRecording status so the UI can show progress.
 
 import json
 import logging
-import uuid
 from datetime import UTC, datetime, timedelta
-
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.ai.claude_provider import ClaudeProvider
 from core.external_api.weather_kma import (
@@ -26,8 +23,12 @@ from core.external_api.weather_kma import (
 )
 from core.stt.post_processor import correct_transcript
 from core.stt.whisper_api import transcribe_audio
+from pydantic import ValidationError
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.models.voice_recording import VoiceRecording
 from app.modules.farm_log.parser_prompt import SYSTEM_PROMPT, build_user_message
+from app.schemas.voice import ParsedFarmLogData
 
 logger = logging.getLogger(__name__)
 
@@ -98,10 +99,12 @@ async def process_voice_recording(
             # Remove ```json\n...\n``` wrapper
             lines = cleaned_response.split("\n")
             # Drop first line (```json) and last line (```)
-            lines = [l for l in lines if not l.strip().startswith("```")]
+            lines = [line for line in lines if not line.strip().startswith("```")]
             cleaned_response = "\n".join(lines).strip()
 
-        parsed_data = json.loads(cleaned_response)
+        parsed_data = ParsedFarmLogData.model_validate(
+            json.loads(cleaned_response)
+        ).model_dump()
 
         # Stage 5: Auto-fill weather from 기상청 API
         # Uses the date Claude extracted from the transcript (defaults to today)
@@ -126,6 +129,15 @@ async def process_voice_recording(
         recording.error_message = f"AI 응답 파싱 실패: {raw_response[:500]}"
         await db.commit()
         raise ValueError("AI 응답을 파싱할 수 없습니다. 다시 시도해주세요.")
+
+    except ValidationError as e:
+        # Treat structurally invalid AI output as a failed pipeline result. The
+        # client can then show a recoverable error instead of crashing on fields
+        # such as tasks.map or field_names.length.
+        recording.status = "failed"
+        recording.error_message = f"AI 응답 스키마 오류 ({e.error_count()}건)"
+        await db.commit()
+        raise ValueError("AI 분석 결과 형식이 올바르지 않습니다. 다시 시도해주세요.")
 
     except Exception as e:
         recording.status = "failed"

@@ -19,14 +19,10 @@ from app.database import Base
 class FarmLog(Base):
     __tablename__ = "farm_log"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     farm_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     farmer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    voice_recording_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True
-    )
+    voice_recording_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     log_date: Mapped[date] = mapped_column(Date, nullable=False)
 
     # draft → confirmed → exported
@@ -41,12 +37,11 @@ class FarmLog(Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Photo URLs stored in Supabase Storage — JSONB array of public URLs
-    # Using JSONB instead of a separate table: simpler for now, promotes if we need per-photo metadata later
+    # JSONB keeps the current model simple; promote this to a separate table if
+    # per-photo metadata becomes necessary.
     photo_urls: Mapped[list] = mapped_column(JSONB, default=list, server_default="[]")
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
@@ -63,9 +58,7 @@ class FarmLog(Base):
 class FarmLogTask(Base):
     __tablename__ = "farm_log_task"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     farm_log_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("farm_log.id", ondelete="CASCADE"), nullable=False
     )
@@ -78,9 +71,7 @@ class FarmLogTask(Base):
     duration_hours: Mapped[Decimal | None] = mapped_column(Numeric(4, 1), nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     farm_log: Mapped["FarmLog"] = relationship(back_populates="tasks")
 
@@ -88,19 +79,16 @@ class FarmLogTask(Base):
 class ChemicalUsage(Base):
     __tablename__ = "chemical_usage"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     farm_log_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("farm_log.id", ondelete="CASCADE"), nullable=False
     )
     type: Mapped[str] = mapped_column(String(10), nullable=False)  # '농약' | '비료'
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     amount: Mapped[str | None] = mapped_column(String(100), nullable=True)  # '200리터'
+    dilution_ratio: Mapped[str | None] = mapped_column(String(100), nullable=True)  # '1000배'
     action: Mapped[str] = mapped_column(String(10), default="used")  # 'purchased' | 'used'
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     farm_log: Mapped["FarmLog"] = relationship(back_populates="chemicals")

@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class VoiceUploadResponse(BaseModel):
@@ -42,9 +42,9 @@ class ChemicalData(BaseModel):
 class ParsedFarmLogData(BaseModel):
     """The structured output from Claude parsing."""
     date: str
-    field_names: list[str] = []
+    field_names: list[str] = Field(default_factory=list)
     crop: str = "사과"
     tasks: list[TaskData]
-    chemicals: list[ChemicalData] = []
+    chemicals: list[ChemicalData] = Field(default_factory=list)
     weather_farmer: str | None = None
     notes: str | None = None

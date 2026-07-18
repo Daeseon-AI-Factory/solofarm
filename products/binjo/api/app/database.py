@@ -41,7 +41,7 @@ engine = create_async_engine(
     pool_pre_ping=True,
     pool_size=5,
     max_overflow=10,
-    connect_args={"ssl": _ssl_context},
+    connect_args={"ssl": _ssl_context} if settings.database_ssl else {},
 )
 
 # expire_on_commit=False — lets us access attributes after commit

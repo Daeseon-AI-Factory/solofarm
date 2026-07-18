@@ -15,12 +15,12 @@ Follows the same async/sync pattern as voice endpoints:
 import io
 import logging
 
+from core.storage.file_manager import upload_image
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from core.storage.file_manager import upload_image
 from app.database import get_db
 from app.dependencies import get_current_farmer
 from app.models.farmer import Farmer
@@ -53,8 +53,8 @@ async def _convert_heic_to_jpeg(image_bytes: bytes) -> tuple[bytes, str]:
     iPhone photos are often HEIC — Claude Vision needs JPEG or PNG.
     """
     try:
-        from PIL import Image
         import pillow_heif
+        from PIL import Image
 
         # Register HEIF opener with Pillow
         pillow_heif.register_heif_opener()
@@ -86,6 +86,15 @@ async def upload_receipt(
     Accepts JPEG, PNG, HEIC. HEIC is auto-converted to JPEG.
     Max file size: 10MB.
     """
+    if not settings.enable_receipt_ocr:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "RECEIPT_OCR_UNAVAILABLE",
+                "message": "영수증 자동 인식은 현재 준비 중입니다",
+            },
+        )
+
     content_type = _normalize_content_type(file.content_type or "")
 
     if content_type not in ALLOWED_TYPES:
@@ -93,7 +102,10 @@ async def upload_receipt(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
                 "code": "INVALID_TYPE",
-                "message": f"이미지 파일만 업로드 가능합니다 (JPEG, PNG, HEIC). 받은 형식: {content_type}",
+                "message": (
+                    "이미지 파일만 업로드 가능합니다 (JPEG, PNG, HEIC). "
+                    f"받은 형식: {content_type}"
+                ),
             },
         )
 
