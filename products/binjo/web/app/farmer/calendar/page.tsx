@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { listFarmLogs, type FarmLog } from "@/lib/farmerApi";
+import { getRecordHref } from "@/lib/farmerWorkflow";
 
 // --- Constants ---
 
@@ -183,12 +184,12 @@ export default function CalendarPage() {
   }
 
   return (
-    <div className="max-w-lg mx-auto px-4 pt-4 pb-28">
+    <div className="mx-auto max-w-lg px-1.5 pb-28 pt-4 min-[360px]:px-4">
       {/* ---- Month Navigation ---- */}
       <div className="flex items-center justify-between mb-4">
         <button
           onClick={goToPrevMonth}
-          className="w-10 h-10 flex items-center justify-center rounded-full text-lg font-bold"
+          className="flex h-12 w-12 items-center justify-center rounded-full text-lg font-bold"
           style={{ color: "#2D5016" }}
           aria-label="이전 달"
         >
@@ -199,7 +200,7 @@ export default function CalendarPage() {
         </h2>
         <button
           onClick={goToNextMonth}
-          className="w-10 h-10 flex items-center justify-center rounded-full text-lg font-bold"
+          className="flex h-12 w-12 items-center justify-center rounded-full text-lg font-bold"
           style={{ color: "#2D5016" }}
           aria-label="다음 달"
         >
@@ -227,7 +228,7 @@ export default function CalendarPage() {
           </p>
           <button
             onClick={fetchLogs}
-            className="text-sm px-4 py-2 rounded-lg font-medium"
+            className="min-h-12 rounded-lg px-5 py-2 text-sm font-medium"
             style={{ backgroundColor: "#2D5016", color: "#FFFFFF" }}
           >
             다시 시도
@@ -272,7 +273,7 @@ export default function CalendarPage() {
                 <button
                   key={dateKey}
                   onClick={() => setSelectedDate(isSelected ? null : dateKey)}
-                  className="h-16 flex flex-col items-center pt-1.5 relative transition-colors"
+                  className="relative flex h-16 w-full min-w-0 flex-col items-center pt-1.5 transition-colors"
                   style={{
                     backgroundColor: isSelected
                       ? "#EDF4E8"
@@ -382,7 +383,7 @@ export default function CalendarPage() {
                 </h3>
                 <button
                   onClick={() => setSelectedDate(null)}
-                  className="w-10 h-10 rounded-full flex items-center justify-center text-lg"
+                  className="flex h-12 w-12 items-center justify-center rounded-full text-lg"
                   style={{ color: "#9B9B9B", backgroundColor: "#F5F1EC" }}
                   aria-label="닫기"
                 >
@@ -396,9 +397,9 @@ export default function CalendarPage() {
                     이 날의 기록이 없습니다
                   </p>
                   <button
-                    onClick={() => router.push("/farmer/record")}
-                    className="text-sm px-5 py-3 rounded-xl font-medium"
-                    style={{ backgroundColor: "#2D5016", color: "#FFFFFF", minHeight: "44px" }}
+                    onClick={() => router.push(getRecordHref(selectedDate))}
+                    className="min-h-14 rounded-xl px-6 py-3 text-base font-bold"
+                    style={{ backgroundColor: "#2D5016", color: "#FFFFFF" }}
                   >
                     기록 추가
                   </button>
@@ -551,8 +552,8 @@ export default function CalendarPage() {
 
                   {/* Add record button inside bottom sheet */}
                   <button
-                    onClick={() => router.push("/farmer/record")}
-                    className="w-full text-sm py-3 rounded-xl font-medium"
+                    onClick={() => router.push(getRecordHref(selectedDate))}
+                    className="min-h-14 w-full rounded-xl py-3 text-base font-bold"
                     style={{ backgroundColor: "#F5F1EC", color: "#2D5016" }}
                   >
                     기록 추가
@@ -567,7 +568,7 @@ export default function CalendarPage() {
       {/* ---- Floating Quick-Add Button ---- */}
       <button
         onClick={() => router.push("/farmer/record")}
-        className="fixed z-30 w-14 h-14 rounded-full shadow-lg flex items-center justify-center text-2xl font-bold"
+        className="fixed z-30 flex h-14 w-14 items-center justify-center rounded-full text-2xl font-bold shadow-lg"
         style={{
           backgroundColor: "#2D5016",
           color: "#FFFFFF",

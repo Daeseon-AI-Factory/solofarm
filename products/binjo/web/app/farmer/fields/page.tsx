@@ -1,7 +1,13 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { listFields, createField, type Field } from "@/lib/farmerApi";
+import {
+  createField,
+  deleteField,
+  listFields,
+  updateField,
+  type Field,
+} from "@/lib/farmerApi";
 
 // --- Types for the add/edit form ---
 
@@ -31,6 +37,8 @@ export default function FieldsPage() {
   const [form, setForm] = useState<FieldFormData>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [editingField, setEditingField] = useState<Field | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   // --- Data fetching ---
 
@@ -56,7 +64,21 @@ export default function FieldsPage() {
   // --- Modal handlers ---
 
   const openAddModal = () => {
+    setEditingField(null);
     setForm(EMPTY_FORM);
+    setFormError(null);
+    setModalOpen(true);
+  };
+
+  const openEditModal = (field: Field) => {
+    setEditingField(field);
+    setForm({
+      name: field.name,
+      crop: field.crop || "사과",
+      area_pyeong: field.area_pyeong != null ? String(field.area_pyeong) : "",
+      address: field.address ?? "",
+      notes: field.notes ?? "",
+    });
     setFormError(null);
     setModalOpen(true);
   };
@@ -99,23 +121,39 @@ export default function FieldsPage() {
       if (form.address.trim()) payload.address = form.address.trim();
       if (form.notes.trim()) payload.notes = form.notes.trim();
 
-      await createField(payload);
+      if (editingField) {
+        await updateField(editingField.id, payload);
+      } else {
+        await createField(payload);
+      }
       closeModal();
       await fetchFields();
     } catch (err) {
       const message =
-        err instanceof Error ? err.message : "필지 등록에 실패했습니다";
+        err instanceof Error
+          ? err.message
+          : editingField
+            ? "필지 수정에 실패했습니다"
+            : "필지 등록에 실패했습니다";
       setFormError(message);
-      console.error("[FieldsPage] Failed to create field:", err);
+      console.error("[FieldsPage] Failed to save field:", err);
     } finally {
       setSaving(false);
     }
   };
 
-  // --- Delete handler (disabled — backend not ready) ---
-
-  const handleDelete = () => {
-    // No-op: backend update/delete endpoints not yet available
+  const handleDelete = async (field: Field) => {
+    if (!window.confirm(`'${field.name}' 필지를 삭제하시겠습니까?`)) return;
+    setDeletingId(field.id);
+    setError(null);
+    try {
+      await deleteField(field.id);
+      await fetchFields();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "필지를 삭제하지 못했습니다");
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   // --- Render helpers ---
@@ -208,36 +246,34 @@ export default function FieldsPage() {
         </p>
       )}
 
-      {/* Action buttons — disabled since backend doesn't support update/delete yet */}
+      {/* Action buttons */}
       <div className="flex gap-2 mt-3">
         <button
-          disabled
-          title="준비 중"
-          className="flex-1 text-sm font-medium rounded-xl border transition-opacity"
+          type="button"
+          onClick={() => openEditModal(field)}
+          className="flex-1 text-sm font-medium rounded-xl border transition-opacity active:opacity-70"
           style={{
             height: 44,
-            borderColor: "#E5E2DB",
-            color: "#C4C4C4",
-            backgroundColor: "#FAFAFA",
-            cursor: "not-allowed",
+            borderColor: "#CCD8C5",
+            color: "#2D5016",
+            backgroundColor: "#F4F8F1",
           }}
         >
           수정
         </button>
         <button
-          disabled
-          title="준비 중"
-          onClick={handleDelete}
-          className="flex-1 text-sm font-medium rounded-xl border transition-opacity"
+          type="button"
+          disabled={deletingId === field.id}
+          onClick={() => void handleDelete(field)}
+          className="flex-1 text-sm font-medium rounded-xl border transition-opacity active:opacity-70 disabled:opacity-50"
           style={{
             height: 44,
-            borderColor: "#E5E2DB",
-            color: "#C4C4C4",
-            backgroundColor: "#FAFAFA",
-            cursor: "not-allowed",
+            borderColor: "#E6CDC4",
+            color: "#9F3F24",
+            backgroundColor: "#FFF7F3",
           }}
         >
-          삭제
+          {deletingId === field.id ? "삭제 중" : "삭제"}
         </button>
       </div>
     </div>
@@ -273,7 +309,7 @@ export default function FieldsPage() {
               className="text-lg font-bold mb-5"
               style={{ color: "#2D2D2D" }}
             >
-              필지 등록
+              {editingField ? "필지 수정" : "필지 등록"}
             </h2>
 
             {/* Form error */}
@@ -432,7 +468,7 @@ export default function FieldsPage() {
                   backgroundColor: "#2D5016",
                 }}
               >
-                {saving ? "저장 중..." : "저장"}
+                {saving ? "저장 중..." : editingField ? "수정 완료" : "저장"}
               </button>
             </div>
           </div>

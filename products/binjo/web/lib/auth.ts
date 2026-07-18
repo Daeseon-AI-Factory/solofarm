@@ -5,9 +5,20 @@ const JWT_SECRET = new TextEncoder().encode(
   process.env.JWT_SECRET ?? "change-me-in-production"
 );
 
+function getAdminFarmerId(): string | null {
+  const value = process.env.ADMIN_FARMER_ID?.trim();
+  return value || null;
+}
+
 export async function signAdminToken(): Promise<string> {
+  const farmerId = getAdminFarmerId();
+  if (!farmerId) {
+    throw new Error("ADMIN_FARMER_ID is not configured");
+  }
+
   return new SignJWT({ role: "admin" })
     .setProtectedHeader({ alg: "HS256" })
+    .setSubject(farmerId)
     .setExpirationTime("24h")
     .sign(JWT_SECRET);
 }
@@ -16,8 +27,10 @@ export async function verifyAdminToken(
   token: string
 ): Promise<boolean> {
   try {
-    await jwtVerify(token, JWT_SECRET);
-    return true;
+    const farmerId = getAdminFarmerId();
+    if (!farmerId) return false;
+    const { payload } = await jwtVerify(token, JWT_SECRET);
+    return payload.role === "admin" && payload.sub === farmerId;
   } catch {
     return false;
   }

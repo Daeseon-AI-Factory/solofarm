@@ -2,7 +2,10 @@
 
 import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
+import Link from "next/link";
+import { z } from "zod";
 import { publicCheckout, publicConfirmPayment } from "@/lib/farmerApi";
+import { DIRECT_CHECKOUT_BUILD_ENABLED } from "@/lib/featureFlags";
 
 /**
  * Guest checkout page — no auth required.
@@ -15,6 +18,23 @@ import { publicCheckout, publicConfirmPayment } from "@/lib/farmerApi";
  */
 
 type Step = "form" | "processing" | "success" | "error";
+type ProductLoadState = "loading" | "ready" | "error";
+
+const CheckoutProductSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string().min(1),
+  is_available: z.boolean(),
+  price_options: z
+    .array(
+      z.object({
+        weight: z.string().min(1),
+        price: z.number().int().positive(),
+      })
+    )
+    .nullable(),
+});
+
+type CheckoutProduct = z.infer<typeof CheckoutProductSchema>;
 
 interface CheckoutForm {
   recipientName: string;
@@ -43,14 +63,18 @@ export default function CheckoutPage() {
 
 function CheckoutContent() {
   const searchParams = useSearchParams();
-  const productName = searchParams.get("product") || "";
   const productId = searchParams.get("productId") || "";
   const weightOption = searchParams.get("weight") || "";
-  const unitPrice = parseInt(searchParams.get("price") || "0", 10);
 
   const [step, setStep] = useState<Step>("form");
   const [error, setError] = useState("");
   const [orderId, setOrderId] = useState("");
+  const [checkoutAmount, setCheckoutAmount] = useState<number | null>(null);
+  const [checkoutProductName, setCheckoutProductName] = useState("");
+  const [product, setProduct] = useState<CheckoutProduct | null>(null);
+  const [productLoadState, setProductLoadState] =
+    useState<ProductLoadState>("loading");
+  const [productLoadError, setProductLoadError] = useState("");
   const [form, setForm] = useState<CheckoutForm>({
     recipientName: "",
     recipientPhone: "",
@@ -63,10 +87,72 @@ function CheckoutContent() {
   const [customMessage, setCustomMessage] = useState("");
   const [selectedPreset, setSelectedPreset] = useState("");
 
+  const selectedPriceOption = product?.price_options?.find(
+    (option) => option.weight === weightOption
+  );
+  const productName = product?.name ?? "";
+  const unitPrice = selectedPriceOption?.price ?? 0;
   const totalAmount = unitPrice * form.quantity;
+
+  // Query strings identify the product and option only. Display prices come
+  // from the catalog, while the payment API independently resolves the same
+  // values again so a crafted URL can never control the charged amount.
+  useEffect(() => {
+    if (!DIRECT_CHECKOUT_BUILD_ENABLED) return;
+
+    if (!productId || !weightOption) {
+      setProductLoadError("상품 선택 정보가 올바르지 않습니다.");
+      setProductLoadState("error");
+      return;
+    }
+
+    const controller = new AbortController();
+
+    async function loadProduct() {
+      try {
+        const response = await fetch(
+          `/api/v1/products/${encodeURIComponent(productId)}`,
+          { signal: controller.signal }
+        );
+        if (!response.ok) throw new Error("상품을 찾을 수 없습니다.");
+
+        const parsed = CheckoutProductSchema.parse(await response.json());
+        const hasSelectedOption = parsed.price_options?.some(
+          (option) => option.weight === weightOption
+        );
+
+        if (!parsed.is_available) {
+          throw new Error("현재 주문할 수 없는 상품입니다.");
+        }
+        if (!hasSelectedOption) {
+          throw new Error("선택한 상품 옵션을 확인할 수 없습니다.");
+        }
+
+        setProduct(parsed);
+        setProductLoadState("ready");
+      } catch (loadError) {
+        if (controller.signal.aborted) return;
+        setProductLoadError(
+          loadError instanceof Error
+            ? loadError.message
+            : "상품 정보를 확인할 수 없습니다."
+        );
+        setProductLoadState("error");
+      }
+    }
+
+    void loadProduct();
+    return () => controller.abort();
+  }, [productId, weightOption]);
 
   // Load TossPayments SDK
   useEffect(() => {
+    if (
+      !DIRECT_CHECKOUT_BUILD_ENABLED ||
+      !process.env.NEXT_PUBLIC_TOSS_CLIENT_KEY
+    ) {
+      return;
+    }
     if (document.getElementById("toss-sdk")) return;
     const script = document.createElement("script");
     script.id = "toss-sdk";
@@ -78,6 +164,11 @@ function CheckoutContent() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+
+    if (!product || !selectedPriceOption) {
+      setError("상품 정보를 다시 확인해 주세요.");
+      return;
+    }
 
     if (!form.recipientName.trim()) {
       setError("받는 분 이름을 입력해주세요");
@@ -92,17 +183,28 @@ function CheckoutContent() {
       return;
     }
 
+    const tossClientKey = process.env.NEXT_PUBLIC_TOSS_CLIENT_KEY;
+    const tossPaymentsFactory = (window as unknown as Record<string, unknown>)
+      .TossPayments;
+
+    if (!DIRECT_CHECKOUT_BUILD_ENABLED || !tossClientKey) {
+      setError("온라인 결제는 현재 준비 중입니다. 농장 안내에서 문의해 주세요.");
+      return;
+    }
+
+    if (typeof tossPaymentsFactory !== "function") {
+      setError("결제 모듈을 불러오는 중입니다. 잠시 후 다시 시도해 주세요.");
+      return;
+    }
+
     setStep("processing");
 
     try {
       // Step 1: Create checkout on server
       const checkout = await publicCheckout({
-        product_name: productName,
-        product_id: productId || undefined,
+        product_id: product.id,
         quantity: form.quantity,
-        weight_option: weightOption || undefined,
-        unit_price: unitPrice,
-        total_amount: totalAmount,
+        weight_option: selectedPriceOption.weight,
         recipient_name: form.recipientName,
         recipient_phone: form.recipientPhone,
         postal_code: form.postalCode || undefined,
@@ -115,24 +217,12 @@ function CheckoutContent() {
       });
 
       setOrderId(checkout.order_id);
+      setCheckoutAmount(checkout.amount);
+      setCheckoutProductName(checkout.product_name);
 
       // Step 2: Open Toss payment widget
-      const tossClientKey = process.env.NEXT_PUBLIC_TOSS_CLIENT_KEY;
-      if (!tossClientKey) {
-        // No Toss key — simulate success for dev/testing
-        const confirmed = await publicConfirmPayment({
-          payment_key: `dev_${Date.now()}`,
-          order_id: checkout.toss_order_id,
-          amount: checkout.amount,
-        });
-        setOrderId(confirmed.order_id);
-        setStep("success");
-        return;
-      }
-
       // Real Toss payment
-      const tossPayments = (window as unknown as Record<string, unknown>)
-        .TossPayments as (key: string) => {
+      const tossPayments = tossPaymentsFactory as (key: string) => {
         requestPayment: (
           method: string,
           params: Record<string, unknown>
@@ -168,7 +258,20 @@ function CheckoutContent() {
     }
   };
 
-  if (!productName || !unitPrice) {
+  if (productLoadState === "loading") {
+    return (
+      <div
+        className="flex min-h-screen items-center justify-center px-4"
+        style={{ backgroundColor: "#FDFBF7" }}
+      >
+        <p className="text-sm" style={{ color: "#6B6B6B" }}>
+          상품 정보를 확인하고 있습니다...
+        </p>
+      </div>
+    );
+  }
+
+  if (productLoadState === "error" || !product || !selectedPriceOption) {
     return (
       <div
         className="min-h-screen flex items-center justify-center px-4"
@@ -176,18 +279,18 @@ function CheckoutContent() {
       >
         <div className="text-center">
           <p className="text-lg font-bold mb-2" style={{ color: "#1A1A1A" }}>
-            상품 정보가 없습니다
+            상품 정보를 확인할 수 없습니다
           </p>
           <p className="text-sm mb-4" style={{ color: "#6B6B6B" }}>
-            브랜드 페이지에서 상품을 선택해주세요
+            {productLoadError || "브랜드 페이지에서 상품을 다시 선택해 주세요."}
           </p>
-          <a
+          <Link
             href="/"
             className="inline-block px-6 py-3 rounded-xl font-bold text-white"
             style={{ backgroundColor: "#2D5016" }}
           >
             브랜드 페이지로 이동
-          </a>
+          </Link>
         </div>
       </div>
     );
@@ -227,7 +330,7 @@ function CheckoutContent() {
               상품
             </p>
             <p className="text-sm font-medium mb-2" style={{ color: "#1A1A1A" }}>
-              {productName} {weightOption && `(${weightOption})`} x{" "}
+              {checkoutProductName || productName} ({selectedPriceOption.weight}) x{" "}
               {form.quantity}
             </p>
             <p className="text-xs mb-1" style={{ color: "#9B9B9B" }}>
@@ -237,18 +340,18 @@ function CheckoutContent() {
               className="text-lg font-bold"
               style={{ color: "#D4421E" }}
             >
-              {totalAmount.toLocaleString()}원
+              {(checkoutAmount ?? totalAmount).toLocaleString()}원
             </p>
           </div>
           <div className="flex gap-3">
-            <a
+            <Link
               href={`/order-status?id=${orderId}`}
               className="flex-1 py-3 rounded-xl font-bold text-white text-center"
               style={{ backgroundColor: "#2D5016" }}
             >
               주문 조회
-            </a>
-            <a
+            </Link>
+            <Link
               href="/"
               className="flex-1 py-3 rounded-xl font-bold text-center"
               style={{
@@ -257,7 +360,7 @@ function CheckoutContent() {
               }}
             >
               홈으로
-            </a>
+            </Link>
           </div>
         </div>
       </div>
@@ -286,13 +389,13 @@ function CheckoutContent() {
         style={{ backgroundColor: "#FFFFFF", borderColor: "#E5E2DB" }}
       >
         <div className="max-w-lg mx-auto flex items-center gap-3">
-          <a
+          <Link
             href="/"
             className="text-xl"
             style={{ color: "#2D5016" }}
           >
             &#8592;
-          </a>
+          </Link>
           <h1 className="text-lg font-bold" style={{ color: "#2D5016" }}>
             주문하기
           </h1>
@@ -313,11 +416,9 @@ function CheckoutContent() {
               <p className="font-bold" style={{ color: "#1A1A1A" }}>
                 {productName}
               </p>
-              {weightOption && (
-                <p className="text-sm" style={{ color: "#6B6B6B" }}>
-                  {weightOption}
-                </p>
-              )}
+              <p className="text-sm" style={{ color: "#6B6B6B" }}>
+                {selectedPriceOption.weight}
+              </p>
             </div>
             <p className="font-bold" style={{ color: "#D4421E" }}>
               {unitPrice.toLocaleString()}원
@@ -344,7 +445,7 @@ function CheckoutContent() {
               <button
                 type="button"
                 onClick={() =>
-                  setForm((f) => ({ ...f, quantity: f.quantity + 1 }))
+                  setForm((f) => ({ ...f, quantity: Math.min(20, f.quantity + 1) }))
                 }
                 className="w-8 h-8 rounded-lg flex items-center justify-center font-bold"
                 style={{ backgroundColor: "#F5F1EC", color: "#2D5016" }}

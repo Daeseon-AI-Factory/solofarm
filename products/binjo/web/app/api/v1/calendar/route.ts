@@ -1,7 +1,9 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { requireAdmin } from "@/lib/auth";
+import { sanitizePublicCalendarMonths } from "@/lib/publicFarmProfile";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     const calendar = await prisma.seasonalCalendar.findMany({
       select: {
@@ -14,7 +16,15 @@ export async function GET() {
       orderBy: { month: "asc" },
     });
 
-    return NextResponse.json(calendar);
+    const forcePublicView = req.nextUrl.searchParams.get("view") === "public";
+    const canViewDraft = !forcePublicView && (await requireAdmin(req));
+    const responseCalendar = canViewDraft
+      ? calendar
+      : sanitizePublicCalendarMonths(calendar);
+
+    return NextResponse.json(responseCalendar, {
+      headers: { "Cache-Control": "no-store" },
+    });
   } catch (error) {
     console.error("GET /api/v1/calendar failed:", error);
     return NextResponse.json(

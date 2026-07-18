@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import ImageUpload from "@/components/admin/ImageUpload";
 
 interface FarmForm {
@@ -72,13 +72,18 @@ export default function FarmAdminPage() {
   });
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
 
-  useEffect(() => {
-    fetch("/api/v1/farm")
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.error) return;
-        setForm({
+  const loadFarm = useCallback(async () => {
+    setLoading(true);
+    setLoadError("");
+    try {
+      const response = await fetch("/api/v1/farm");
+      if (!response.ok) throw new Error(`농장 정보 요청 실패 (HTTP ${response.status})`);
+      const data = await response.json();
+      if (data.error) throw new Error(data.error?.message ?? "농장 정보를 불러오지 못했습니다");
+      setForm({
           name: data.name ?? "",
           tagline: data.tagline ?? "",
           story: data.story ?? "",
@@ -93,47 +98,91 @@ export default function FarmAdminPage() {
           stats_area: data.stats?.area ?? "",
           stats_experience: data.stats?.experience ?? "",
           stats_varieties: data.stats?.varieties ?? "",
-        });
       });
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "농장 정보를 불러오지 못했습니다");
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void loadFarm();
+  }, [loadFarm]);
 
   const handleChange = (field: keyof FarmForm, value: string) => {
     setForm((prev) => ({ ...prev, [field]: value }));
   };
 
   const handleSave = async () => {
+    if (loading || loadError) return;
+    if (!form.name.trim()) {
+      setMessage("농장 이름을 입력해주세요");
+      return;
+    }
     setSaving(true);
     setMessage("");
-    const res = await fetch("/api/admin/farm", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: form.name || undefined,
-        tagline: form.tagline || null,
-        story: form.story || null,
-        phone: form.phone || null,
-        kakao_chat_url: form.kakao_chat_url || null,
-        naver_store_url: form.naver_store_url || null,
-        youtube_url: form.youtube_url || null,
-        address_short: form.address_short || null,
-        address: form.address || null,
-        hero_image_url: form.hero_image_url || null,
-        farmer_image_url: form.farmer_image_url || null,
-        stats: {
-          area: form.stats_area || undefined,
-          experience: form.stats_experience || undefined,
-          varieties: form.stats_varieties || undefined,
-        },
-      }),
-    });
-    setSaving(false);
-    if (res.ok) {
-      setMessage("저장되었습니다!");
-    } else {
-      const data = await res.json();
-      setMessage(data.error?.message ?? "저장 실패");
+    try {
+      const res = await fetch("/api/admin/farm", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: form.name.trim(),
+          tagline: form.tagline || null,
+          story: form.story || null,
+          phone: form.phone || null,
+          kakao_chat_url: form.kakao_chat_url || null,
+          naver_store_url: form.naver_store_url || null,
+          youtube_url: form.youtube_url || null,
+          address_short: form.address_short || null,
+          address: form.address || null,
+          hero_image_url: form.hero_image_url || null,
+          farmer_image_url: form.farmer_image_url || null,
+          stats: {
+            area: form.stats_area || undefined,
+            experience: form.stats_experience || undefined,
+            varieties: form.stats_varieties || undefined,
+          },
+        }),
+      });
+      if (res.ok) {
+        setMessage("저장되었습니다!");
+      } else {
+        const data = await res.json();
+        setMessage(data.error?.message ?? "저장 실패");
+      }
+    } catch {
+      setMessage("서버에 연결할 수 없습니다");
+    } finally {
+      setSaving(false);
     }
   };
+
+  if (loading) {
+    return (
+      <div className="p-6 md:p-8 max-w-2xl">
+        <h1 className="text-xl font-bold" style={{ color: "#2D5016" }}>농장 정보 수정</h1>
+        <div className="mt-8 rounded-2xl p-8 text-center text-sm" style={{ backgroundColor: "#FFFFFF", color: "#6B6B6B" }}>
+          저장된 농장 정보를 불러오고 있습니다...
+        </div>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="p-6 md:p-8 max-w-2xl">
+        <h1 className="text-xl font-bold" style={{ color: "#2D5016" }}>농장 정보 수정</h1>
+        <div className="mt-8 rounded-2xl border p-6" style={{ backgroundColor: "#FFF7ED", borderColor: "#F2C48D" }} role="alert">
+          <p className="font-bold" style={{ color: "#8A4515" }}>기존 정보를 불러오지 못해 편집을 막았습니다</p>
+          <p className="mt-1 text-sm" style={{ color: "#7A5A42" }}>{loadError}</p>
+          <button type="button" onClick={() => void loadFarm()} className="mt-4 min-h-11 rounded-xl px-5 text-sm font-bold text-white" style={{ backgroundColor: "#8A4515" }}>
+            다시 불러오기
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 md:p-8 max-w-2xl">

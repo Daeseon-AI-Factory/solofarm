@@ -189,7 +189,7 @@ function StyleEditor({
         const data = await res.json().catch(() => null);
         setUploadError(data?.error?.message ?? `업로드 실패 (${res.status})`);
       }
-    } catch (err) {
+    } catch {
       setUploadError("네트워크 오류 — 다시 시도해주세요");
     }
     setUploading(false);

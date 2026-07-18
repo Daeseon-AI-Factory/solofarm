@@ -4,6 +4,7 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { requireAdmin, unauthorizedResponse } from "@/lib/auth";
+import { ImageUrlSchema } from "@/lib/imageUrl";
 
 const PriceOptionSchema = z.object({
   weight: z.string(),
@@ -19,7 +20,7 @@ const CreateProductSchema = z.object({
   harvest_end_month: z.number().int().min(1).max(12).optional().nullable(),
   is_available: z.boolean().optional(),
   price_options: z.array(PriceOptionSchema).optional().nullable(),
-  image_url: z.string().url().max(500).optional().nullable(),
+  image_url: ImageUrlSchema.optional().nullable(),
   sort_order: z.number().int().optional(),
 });
 

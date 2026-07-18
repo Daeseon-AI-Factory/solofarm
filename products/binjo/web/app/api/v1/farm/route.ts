@@ -1,7 +1,10 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { requireAdmin } from "@/lib/auth";
+import { sanitizePublicFarmProfile } from "@/lib/publicFarmProfile";
+import type { FarmProfile } from "@/types";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     const farm = await prisma.farm.findFirst({
       select: {
@@ -31,7 +34,23 @@ export async function GET() {
       );
     }
 
-    return NextResponse.json(farm);
+    const farmProfile = {
+      ...farm,
+      latitude: farm.latitude ? Number(farm.latitude) : null,
+      longitude: farm.longitude ? Number(farm.longitude) : null,
+      stats: farm.stats as FarmProfile["stats"],
+    };
+    // The admin editor reuses this route and must be able to replace draft seed
+    // values. Anonymous visitors receive the sanitized public projection.
+    const forcePublicView = req.nextUrl.searchParams.get("view") === "public";
+    const canViewDraft = !forcePublicView && (await requireAdmin(req));
+    const responseFarm = canViewDraft
+      ? farmProfile
+      : sanitizePublicFarmProfile(farmProfile);
+
+    return NextResponse.json(responseFarm, {
+      headers: { "Cache-Control": "no-store" },
+    });
   } catch (error) {
     console.error("GET /api/v1/farm failed:", error);
     return NextResponse.json(

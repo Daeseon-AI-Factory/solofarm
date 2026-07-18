@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { requireAdmin } from "@/lib/auth";
+import { sanitizePublicProductItems } from "@/lib/publicFarmProfile";
+import type { ProductItem } from "@/types";
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
@@ -31,7 +34,26 @@ export async function GET(
       );
     }
 
-    return NextResponse.json(product);
+    const productItem: ProductItem = {
+      ...product,
+      price_options: product.price_options as ProductItem["price_options"],
+    };
+    const forcePublicView = req.nextUrl.searchParams.get("view") === "public";
+    const canViewDraft = !forcePublicView && (await requireAdmin(req));
+    const responseProduct = canViewDraft
+      ? productItem
+      : sanitizePublicProductItems([productItem])[0];
+
+    if (!responseProduct) {
+      return NextResponse.json(
+        { error: { code: "NOT_FOUND", message: "상품을 찾을 수 없습니다" } },
+        { status: 404, headers: { "Cache-Control": "no-store" } }
+      );
+    }
+
+    return NextResponse.json(responseProduct, {
+      headers: { "Cache-Control": "no-store" },
+    });
   } catch (error) {
     console.error("GET /api/v1/products/[id] failed:", error);
     return NextResponse.json(

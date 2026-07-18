@@ -1,0 +1,59 @@
+FROM node:20-alpine
+
+WORKDIR /app
+
+ENV NEXT_TELEMETRY_DISABLED=1
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
+COPY . .
+
+# Runtime uploads live on a named volume mounted at this path in Compose.
+RUN mkdir -p /app/uploads
+
+# NEXT_PUBLIC_* values are embedded in browser bundles during `next build`.
+# The same-origin /backend route is terminated by Caddy in the Vultr stack.
+ARG NEXT_PUBLIC_API_URL=/backend
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+
+ARG NEXT_PUBLIC_ENABLE_TEST_LOGIN=false
+ARG NEXT_PUBLIC_ENABLE_KAKAO_LOGIN=false
+ARG NEXT_PUBLIC_ENABLE_VOICE=false
+ARG NEXT_PUBLIC_ENABLE_PHOTO_UPLOAD=false
+ARG NEXT_PUBLIC_ENABLE_DIRECT_CHECKOUT=false
+ARG NEXT_PUBLIC_ENABLE_RECEIPT_OCR=false
+ARG NEXT_PUBLIC_TOSS_CLIENT_KEY=
+ENV NEXT_PUBLIC_ENABLE_TEST_LOGIN=${NEXT_PUBLIC_ENABLE_TEST_LOGIN}
+ENV NEXT_PUBLIC_ENABLE_KAKAO_LOGIN=${NEXT_PUBLIC_ENABLE_KAKAO_LOGIN}
+ENV NEXT_PUBLIC_ENABLE_VOICE=${NEXT_PUBLIC_ENABLE_VOICE}
+ENV NEXT_PUBLIC_ENABLE_PHOTO_UPLOAD=${NEXT_PUBLIC_ENABLE_PHOTO_UPLOAD}
+ENV NEXT_PUBLIC_ENABLE_DIRECT_CHECKOUT=${NEXT_PUBLIC_ENABLE_DIRECT_CHECKOUT}
+ENV NEXT_PUBLIC_ENABLE_RECEIPT_OCR=${NEXT_PUBLIC_ENABLE_RECEIPT_OCR}
+ENV NEXT_PUBLIC_TOSS_CLIENT_KEY=${NEXT_PUBLIC_TOSS_CLIENT_KEY}
+
+# Public project URL used by browser-side Supabase clients. It is not a secret,
+# but Next.js still needs it at build time to inline it into the bundle.
+ARG NEXT_PUBLIC_SUPABASE_URL=
+ENV NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+
+# Prisma constructs its adapter while Next evaluates modules during the build.
+# A syntactically valid non-secret URL is enough because the brand page is
+# force-dynamic and therefore does not query the database while building.
+ARG DATABASE_URL=postgresql://build:build@127.0.0.1:5432/build
+ARG DIRECT_URL=postgresql://build:build@127.0.0.1:5432/build
+ENV DATABASE_URL=${DATABASE_URL}
+ENV DIRECT_URL=${DIRECT_URL}
+
+RUN npm run build
+
+# Build and database tooling are not needed by the running web server. Keeping
+# them out of the final dependency tree reduces both image size and attack
+# surface while preserving the generated Prisma client used at runtime.
+RUN npm prune --omit=dev --legacy-peer-deps
+
+ENV NODE_ENV=production
+
+EXPOSE 3000
+
+CMD ["npm", "run", "start", "--", "-H", "0.0.0.0", "-p", "3000"]

@@ -1,7 +1,14 @@
 "use client";
 
-import { useEffect, useState, useMemo, useCallback, useRef } from "react";
-import { useRouter } from "next/navigation";
+import {
+  Suspense,
+  useEffect,
+  useState,
+  useMemo,
+  useCallback,
+  useRef,
+} from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   listFarmLogs,
   confirmFarmLog,
@@ -9,6 +16,7 @@ import {
   getExportUrl,
   type FarmLog,
 } from "@/lib/farmerApi";
+import { localDateISO } from "@/lib/farmerDate";
 
 // --- Constants ---
 
@@ -63,7 +71,7 @@ function getWeekStart(): string {
   const diff = day === 0 ? 6 : day - 1;
   const monday = new Date(now);
   monday.setDate(now.getDate() - diff);
-  return monday.toISOString().slice(0, 10);
+  return localDateISO(monday);
 }
 
 /** Get start of current month as YYYY-MM-DD */
@@ -98,8 +106,10 @@ function getWeatherSummary(
 
 // --- Component ---
 
-export default function LogsPage() {
+function LogsPageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const requestedLogId = searchParams.get("id");
 
   // Data state
   const [logs, setLogs] = useState<FarmLog[]>([]);
@@ -113,6 +123,9 @@ export default function LogsPage() {
   // Detail bottom sheet
   const [selectedLog, setSelectedLog] = useState<FarmLog | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [deepLinkError, setDeepLinkError] = useState<string | null>(null);
+  const deepLinkHandledRef = useRef<string | null>(null);
 
   // Ref for scrollable filter chips
   const chipScrollRef = useRef<HTMLDivElement>(null);
@@ -137,6 +150,25 @@ export default function LogsPage() {
   useEffect(() => {
     fetchLogs();
   }, [fetchLogs]);
+
+  useEffect(() => {
+    if (!requestedLogId) {
+      deepLinkHandledRef.current = null;
+      setDeepLinkError(null);
+      return;
+    }
+    if (loading || error || deepLinkHandledRef.current === requestedLogId) return;
+
+    deepLinkHandledRef.current = requestedLogId;
+    const requestedLog = logs.find((log) => log.id === requestedLogId);
+    if (requestedLog) {
+      setSelectedLog(requestedLog);
+      setActionError(null);
+      setDeepLinkError(null);
+    } else {
+      setDeepLinkError("요청한 영농일지를 찾을 수 없습니다.");
+    }
+  }, [error, loading, logs, requestedLogId]);
 
   // --- Filtering ---
 
@@ -189,40 +221,58 @@ export default function LogsPage() {
 
   const handleConfirm = async (id: string) => {
     setActionLoading(true);
+    setActionError(null);
     try {
       await confirmFarmLog(id);
       await fetchLogs();
       setSelectedLog(null);
     } catch (err) {
       console.error("[LogsPage] Failed to confirm log:", err);
+      setActionError(
+        err instanceof Error ? err.message : "기록 확인 완료에 실패했습니다."
+      );
+    } finally {
+      setActionLoading(false);
     }
-    setActionLoading(false);
   };
 
   const handleDelete = async (id: string) => {
     if (!confirm("이 기록을 삭제하시겠습니까?")) return;
     setActionLoading(true);
+    setActionError(null);
     try {
       await deleteFarmLog(id);
       await fetchLogs();
       setSelectedLog(null);
     } catch (err) {
       console.error("[LogsPage] Failed to delete log:", err);
+      setActionError(
+        err instanceof Error ? err.message : "기록 삭제에 실패했습니다."
+      );
+    } finally {
+      setActionLoading(false);
     }
-    setActionLoading(false);
   };
 
-  const handleExport = () => {
+  const handleExport = async () => {
     if (logs.length === 0) return;
     const dates = logs.map((l) => l.log_date).sort();
-    const url = getExportUrl(dates[0], dates[dates.length - 1]);
+    const url = await getExportUrl(dates[0], dates[dates.length - 1]);
     window.open(url, "_blank");
   };
 
   // --- Render ---
 
   return (
-    <div className="min-h-screen pb-24" style={{ backgroundColor: "#F5F1EC" }}>
+    <div
+      className="min-h-screen pb-32"
+      style={
+        {
+          backgroundColor: "#F5F1EC",
+          "--farmer-nav-height": "72px",
+        } as React.CSSProperties
+      }
+    >
       {/* Header */}
       <div className="sticky top-0 z-30" style={{ backgroundColor: "#F5F1EC" }}>
         <div className="px-4 pt-4 pb-2 max-w-lg mx-auto">
@@ -346,6 +396,23 @@ export default function LogsPage() {
 
       {/* Content area */}
       <div className="px-4 max-w-lg mx-auto">
+        {deepLinkError && !loading && (
+          <div
+            role="alert"
+            className="rounded-xl p-4 text-sm mt-4 flex items-start justify-between gap-3"
+            style={{ backgroundColor: "#FEF3E2", color: "#D4421E" }}
+          >
+            <span>⚠️ {deepLinkError}</span>
+            <button
+              type="button"
+              onClick={() => router.replace("/farmer/logs")}
+              className="shrink-0 font-semibold"
+            >
+              닫기
+            </button>
+          </div>
+        )}
+
         {/* Loading state */}
         {loading && (
           <div className="flex flex-col items-center justify-center py-16">
@@ -389,7 +456,7 @@ export default function LogsPage() {
               아직 기록이 없어요
             </p>
             <p className="text-sm mb-6" style={{ color: "#9B9B9B" }}>
-              오늘 하신 농작업을 음성으로 기록해 보세요
+              오늘 하신 농작업을 영농일지로 남겨보세요
             </p>
             <button
               onClick={() => router.push("/farmer/record")}
@@ -437,7 +504,10 @@ export default function LogsPage() {
             return (
               <button
                 key={log.id}
-                onClick={() => setSelectedLog(log)}
+                onClick={() => {
+                  setActionError(null);
+                  setSelectedLog(log);
+                }}
                 className="w-full text-left rounded-2xl p-4 mb-3 transition-transform active:scale-[0.98]"
                 style={{ backgroundColor: "#FFFFFF" }}
               >
@@ -515,8 +585,12 @@ export default function LogsPage() {
       {/* Floating action button */}
       <button
         onClick={() => router.push("/farmer/record")}
-        className="fixed bottom-6 right-6 w-14 h-14 rounded-full flex items-center justify-center text-white text-2xl shadow-lg transition-transform active:scale-90 z-20"
-        style={{ backgroundColor: "#2D5016" }}
+        className="fixed right-6 w-14 h-14 rounded-full flex items-center justify-center text-white text-2xl shadow-lg transition-transform active:scale-90 z-40"
+        style={{
+          backgroundColor: "#2D5016",
+          bottom:
+            "calc(var(--farmer-nav-height, 72px) + env(safe-area-inset-bottom) + 16px)",
+        }}
         aria-label="새 기록 추가"
       >
         +
@@ -526,7 +600,12 @@ export default function LogsPage() {
       {selectedLog && (
         <div
           className="fixed inset-0 z-50 flex items-end justify-center"
-          onClick={() => !actionLoading && setSelectedLog(null)}
+          onClick={() => {
+            if (!actionLoading) {
+              setSelectedLog(null);
+              setActionError(null);
+            }
+          }}
         >
           {/* Backdrop */}
           <div className="absolute inset-0 bg-black/40" />
@@ -574,7 +653,12 @@ export default function LogsPage() {
                 </span>
               </div>
               <button
-                onClick={() => !actionLoading && setSelectedLog(null)}
+                onClick={() => {
+                  if (!actionLoading) {
+                    setSelectedLog(null);
+                    setActionError(null);
+                  }
+                }}
                 className="w-10 h-10 flex items-center justify-center rounded-full"
                 style={{ backgroundColor: "#F5F1EC", color: "#9B9B9B" }}
               >
@@ -674,6 +758,14 @@ export default function LogsPage() {
                               style={{ color: "#8B6914" }}
                             >
                               {c.amount}
+                            </span>
+                          )}
+                          {c.dilution_ratio && (
+                            <span
+                              className="text-xs ml-2"
+                              style={{ color: "#8B6914" }}
+                            >
+                              희석 {c.dilution_ratio}
                             </span>
                           )}
                           {c.action && (
@@ -777,6 +869,16 @@ export default function LogsPage() {
               )}
             </div>
 
+            {actionError && (
+              <div
+                role="alert"
+                className="mx-4 mt-3 rounded-xl p-3 text-sm"
+                style={{ backgroundColor: "#FEF3E2", color: "#D4421E" }}
+              >
+                ⚠️ {actionError}
+              </div>
+            )}
+
             {/* Action buttons */}
             <div
               className="p-4 border-t flex gap-3"
@@ -792,7 +894,9 @@ export default function LogsPage() {
               </button>
               <button
                 onClick={() =>
-                  router.push(`/farmer/record?edit=${selectedLog.id}`)
+                  router.push(
+                    `/farmer/record?edit=${encodeURIComponent(selectedLog.id)}`
+                  )
                 }
                 disabled={actionLoading}
                 className="px-4 py-2.5 rounded-xl text-sm font-medium transition-colors disabled:opacity-50"
@@ -845,5 +949,22 @@ export default function LogsPage() {
         }
       `}</style>
     </div>
+  );
+}
+
+export default function LogsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div
+          className="min-h-screen flex items-center justify-center text-sm"
+          style={{ backgroundColor: "#F5F1EC", color: "#2D5016" }}
+        >
+          기록을 불러오는 중...
+        </div>
+      }
+    >
+      <LogsPageContent />
+    </Suspense>
   );
 }

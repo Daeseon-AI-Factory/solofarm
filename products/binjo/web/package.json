@@ -7,6 +7,10 @@
     "build": "prisma generate && next build",
     "start": "next start",
     "lint": "eslint",
+    "test:admin-login": "node --import tsx --test tests/adminLoginSecurity.test.ts",
+    "test:admin-ui": "node --import tsx --test tests/adminUi.test.ts",
+    "test:public-profile": "node --import tsx --test tests/publicFarmProfile.test.ts",
+    "test:storage": "node --import tsx --test tests/storage.test.ts",
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",
@@ -16,13 +20,12 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
-    "@prisma/adapter-pg": "^7.4.2",
-    "@prisma/client": "^7.4.2",
+    "@prisma/adapter-pg": "7.8.0",
+    "@prisma/client": "7.8.0",
     "@supabase/supabase-js": "^2.99.0",
     "jose": "^6.2.0",
-    "next": "16.1.6",
+    "next": "16.2.10",
     "pg": "^8.20.0",
-    "prisma": "^7.4.2",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "zod": "^4.3.6"
@@ -35,9 +38,15 @@
     "@types/react-dom": "^19",
     "dotenv": "^17.3.1",
     "eslint": "^9",
-    "eslint-config-next": "16.1.6",
+    "eslint-config-next": "16.2.10",
+    "prisma": "7.8.0",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "typescript": "^5"
+  },
+  "overrides": {
+    "next": {
+      "postcss": "8.5.10"
+    }
   }
 }

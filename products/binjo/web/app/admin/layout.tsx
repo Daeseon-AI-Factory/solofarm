@@ -1,227 +1,283 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-
-const NAV_ITEMS = [
-  { href: "/admin", label: "대시보드", icon: "🏠" },
-  { href: "/admin/farm", label: "농장 정보", icon: "🌿" },
-  { href: "/admin/products", label: "상품 관리", icon: "🍎" },
-  { href: "/admin/orders", label: "주문 관리", icon: "📦" },
-  { href: "/admin/gallery", label: "사진 갤러리", icon: "📷" },
-  { href: "/admin/reviews", label: "고객 후기", icon: "⭐" },
-  { href: "/admin/calendar", label: "제철 달력", icon: "📅" },
-  { href: "/admin/layout-editor", label: "페이지 관리", icon: "🎨" },
-  { href: "/admin/analytics", label: "방문 통계", icon: "📊" },
-];
-
-// First 4 items show in the bottom bar; the rest appear in the "More" popup
-const MOBILE_MAIN_COUNT = 4;
+import { usePathname } from "next/navigation";
+import AdminIcon from "@/components/admin/AdminIcon";
+import AdminNotice from "@/components/admin/AdminNotice";
+import {
+  ADMIN_NAV_ITEMS,
+  adminNavKeyForPath,
+} from "@/lib/adminNavigation";
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const [authed, setAuthed] = useState(false);
+  const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [checking, setChecking] = useState(true);
-  const [moreOpen, setMoreOpen] = useState(false);
+  const [sessionError, setSessionError] = useState("");
   const pathname = usePathname();
-  const router = useRouter();
+  const activeKey = adminNavKeyForPath(pathname);
 
-  useEffect(() => {
-    // Check if already authenticated
-    fetch("/api/admin/inquiries")
-      .then((r) => {
-        if (r.ok) setAuthed(true);
-        setChecking(false);
-      })
-      .catch(() => setChecking(false));
+  const checkSession = useCallback(async () => {
+    setChecking(true);
+    setSessionError("");
+    try {
+      const response = await fetch("/api/admin/session", {
+        credentials: "same-origin",
+        cache: "no-store",
+      });
+      if (response.ok) {
+        setAuthed(true);
+      } else if (response.status === 401) {
+        setAuthed(false);
+      } else {
+        throw new Error(`로그인 상태 확인 실패 (HTTP ${response.status})`);
+      }
+    } catch (sessionCheckError) {
+      setSessionError(
+        sessionCheckError instanceof Error
+          ? sessionCheckError.message
+          : "로그인 상태를 확인하지 못했습니다"
+      );
+    } finally {
+      setChecking(false);
+    }
   }, []);
 
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
+  useEffect(() => {
+    void checkSession();
+  }, [checkSession]);
+
+  const handleLogout = async () => {
+    setError("");
+    try {
+      const response = await fetch("/api/admin/logout", { method: "POST" });
+      if (!response.ok) throw new Error("로그아웃 요청에 실패했습니다");
+      setAuthed(false);
+      setPassword("");
+    } catch (logoutError) {
+      setError(
+        logoutError instanceof Error
+          ? logoutError.message
+          : "로그아웃하지 못했습니다"
+      );
+    }
+  };
+
+  const handleLogin = async (event: React.FormEvent) => {
+    event.preventDefault();
     setLoading(true);
     setError("");
 
-    const res = await fetch("/api/admin/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password }),
-    });
+    try {
+      const response = await fetch("/api/admin/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
 
-    if (res.ok) {
-      setAuthed(true);
-    } else {
-      const data = await res.json();
-      setError(data.error?.message ?? "로그인 실패");
+      if (response.ok) {
+        setAuthed(true);
+        setPassword("");
+      } else {
+        const data = await response.json().catch(() => null);
+        setError(data?.error?.message ?? "로그인 실패");
+      }
+    } catch {
+      setError("서버에 연결할 수 없습니다. 잠시 후 다시 시도해주세요.");
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   if (checking) {
     return (
-      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: "#FDFBF7" }}>
-        <p style={{ color: "#9B9B9B" }}>확인 중...</p>
+      <div
+        className="flex min-h-screen items-center justify-center"
+        style={{ backgroundColor: "#F8F5EF", color: "#66705F" }}
+      >
+        <p className="text-sm font-medium">관리자 화면을 준비하고 있습니다...</p>
+      </div>
+    );
+  }
+
+  if (sessionError) {
+    return (
+      <div
+        className="flex min-h-screen items-center justify-center px-4"
+        style={{ backgroundColor: "#F8F5EF" }}
+      >
+        <div className="w-full max-w-md">
+          <AdminNotice
+            tone="error"
+            title="로그인 상태를 확인하지 못했습니다"
+            action={
+              <button
+                type="button"
+                onClick={() => void checkSession()}
+                className="min-h-12 rounded-xl border px-4 text-sm font-bold"
+                style={{ borderColor: "#C9806E", backgroundColor: "#FFFFFF" }}
+              >
+                다시 시도
+              </button>
+            }
+          >
+            {sessionError}
+          </AdminNotice>
+        </div>
       </div>
     );
   }
 
   if (!authed) {
     return (
-      <div className="min-h-screen flex items-center justify-center px-4" style={{ backgroundColor: "#FDFBF7" }}>
-        <div className="w-full max-w-sm">
-          <div className="text-center mb-8">
-            <h1 className="text-2xl font-bold" style={{ color: "#2D5016" }}>
-              빈조농장
+      <div
+        className="flex min-h-screen items-center justify-center px-4 py-10"
+        style={{ backgroundColor: "#F8F5EF" }}
+      >
+        <div className="w-full max-w-sm rounded-3xl border bg-white p-6 shadow-sm sm:p-8" style={{ borderColor: "#E2DDD3" }}>
+          <div className="mb-7">
+            <p className="text-xs font-bold tracking-[0.16em]" style={{ color: "#9A541B" }}>
+              BINJO FARM
+            </p>
+            <h1 className="mt-2 text-2xl font-bold" style={{ color: "#1F3D12" }}>
+              농장 운영 관리
             </h1>
-            <p className="text-sm mt-1" style={{ color: "#6B6B6B" }}>관리자 페이지</p>
+            <p className="mt-1 text-sm" style={{ color: "#66705F" }}>
+              주문과 홈페이지를 관리하려면 로그인하세요.
+            </p>
           </div>
           <form onSubmit={handleLogin} className="space-y-4">
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="비밀번호를 입력하세요"
-              className="w-full px-4 py-3 rounded-xl border outline-none focus:ring-2 text-base"
-              style={{ borderColor: "#E5E2DB", backgroundColor: "#FFFFFF" }}
-              autoFocus
-            />
-            {error && <p className="text-sm text-red-500">{error}</p>}
+            <label className="block text-sm font-semibold" style={{ color: "#34422F" }}>
+              아이디
+              <input
+                type="text"
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+                className="mt-1 min-h-13 w-full rounded-xl border px-4 text-base outline-none focus:ring-2 focus:ring-[#2D5016]/25"
+                style={{ borderColor: "#D8D4CB", backgroundColor: "#FFFFFF" }}
+                autoComplete="username"
+                autoCapitalize="none"
+                spellCheck={false}
+                autoFocus
+              />
+            </label>
+            <label className="block text-sm font-semibold" style={{ color: "#34422F" }}>
+              비밀번호
+              <input
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                className="mt-1 min-h-13 w-full rounded-xl border px-4 text-base outline-none focus:ring-2 focus:ring-[#2D5016]/25"
+                style={{ borderColor: "#D8D4CB", backgroundColor: "#FFFFFF" }}
+                autoComplete="current-password"
+              />
+            </label>
+            {error && (
+              <p role="alert" className="text-sm font-medium" style={{ color: "#A63218" }}>
+                {error}
+              </p>
+            )}
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-3 rounded-xl font-bold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+              className="min-h-14 w-full rounded-xl px-5 font-bold text-white transition hover:brightness-110 disabled:opacity-50"
               style={{ backgroundColor: "#2D5016" }}
             >
               {loading ? "확인 중..." : "로그인"}
             </button>
           </form>
-          <button
-            onClick={() => {
-              setPassword("ㅇ");
-              setTimeout(() => {
-                const form = document.querySelector("form");
-                if (form) form.requestSubmit();
-              }, 50);
-            }}
-            className="w-full py-3 rounded-xl text-sm font-medium mt-3 transition-opacity hover:opacity-90"
-            style={{ backgroundColor: "#E5E2DB", color: "#6B6B6B" }}
-          >
-            🔧 Dev Login (테스트용)
-          </button>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen flex" style={{ backgroundColor: "#F5F1EC" }}>
-      {/* Sidebar */}
+    <div className="flex min-h-screen" style={{ backgroundColor: "#F7F4EE" }}>
       <aside
-        className="w-56 flex-shrink-0 hidden md:flex flex-col py-6"
-        style={{ backgroundColor: "#2D5016" }}
+        className="hidden w-60 flex-shrink-0 flex-col border-r px-4 py-6 md:flex"
+        style={{ backgroundColor: "#203A17", borderColor: "#36502D" }}
       >
-        <div className="px-4 mb-8">
-          <h1 className="text-lg font-bold text-white">빈조농장</h1>
-          <p className="text-xs text-white/50 mt-0.5">관리자</p>
+        <div className="px-2">
+          <p className="text-xs font-bold tracking-[0.16em] text-white/55">BINJO FARM</p>
+          <h1 className="mt-1 text-xl font-bold text-white">농장 운영</h1>
         </div>
-        <nav className="flex-1 px-2 space-y-1">
-          {NAV_ITEMS.map((item) => {
-            const isActive = pathname === item.href;
+
+        <nav className="mt-8 flex-1 space-y-2" aria-label="관리자 주요 메뉴">
+          {ADMIN_NAV_ITEMS.map((item) => {
+            const isActive = activeKey === item.key;
             return (
               <Link
-                key={item.href}
+                key={item.key}
                 href={item.href}
-                className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors"
+                aria-current={isActive ? "page" : undefined}
+                className="flex min-h-13 items-center gap-3 rounded-xl px-4 text-sm font-bold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
                 style={{
-                  backgroundColor: isActive ? "rgba(255,255,255,0.15)" : "transparent",
-                  color: isActive ? "#FFFFFF" : "rgba(255,255,255,0.65)",
+                  backgroundColor: isActive ? "#FFFFFF" : "transparent",
+                  color: isActive ? "#203A17" : "rgba(255,255,255,0.72)",
                 }}
               >
-                <span>{item.icon}</span>
+                <AdminIcon name={item.key} />
                 {item.label}
               </Link>
             );
           })}
         </nav>
-        <div className="px-4 mt-4">
+
+        <div className="space-y-2 border-t pt-4" style={{ borderColor: "rgba(255,255,255,0.14)" }}>
           <Link
             href="/"
             target="_blank"
-            className="text-xs text-white/40 hover:text-white/70 transition-colors"
+            className="flex min-h-12 items-center rounded-xl px-3 text-sm font-semibold text-white/70 hover:bg-white/10 hover:text-white"
           >
-            브랜드 페이지 보기 →
+            고객 페이지 보기 ↗
           </Link>
+          <button
+            type="button"
+            onClick={() => void handleLogout()}
+            className="min-h-12 w-full rounded-xl px-3 text-left text-sm font-semibold text-white/60 hover:bg-white/10 hover:text-white"
+          >
+            로그아웃
+          </button>
+          {error && <p className="px-3 text-xs text-[#FFD7CF]">{error}</p>}
         </div>
       </aside>
 
-      {/* Mobile nav — 4 main tabs + "More" button */}
-      <div className="md:hidden fixed bottom-0 left-0 right-0 z-50 border-t" style={{ backgroundColor: "#2D5016", borderColor: "#4A7C2E" }}>
-        {/* "More" popup — slides up above the nav bar */}
-        {moreOpen && (
-          <>
-            {/* Backdrop to close on tap outside */}
-            <div className="fixed inset-0 z-40" onClick={() => setMoreOpen(false)} />
-            <div
-              className="absolute bottom-full left-0 right-0 z-50 rounded-t-2xl shadow-lg p-4 grid grid-cols-4 gap-3"
-              style={{ backgroundColor: "#FFFFFF", borderTop: "1px solid #E5E2DB" }}
-            >
-              {NAV_ITEMS.slice(MOBILE_MAIN_COUNT).map((item) => {
-                const isActive = pathname === item.href;
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    onClick={() => setMoreOpen(false)}
-                    className="flex flex-col items-center gap-1 py-3 rounded-xl text-xs font-medium"
-                    style={{
-                      backgroundColor: isActive ? "#EDF4E8" : "transparent",
-                      color: isActive ? "#2D5016" : "#6B6B6B",
-                    }}
-                  >
-                    <span className="text-xl">{item.icon}</span>
-                    <span>{item.label}</span>
-                  </Link>
-                );
-              })}
-            </div>
-          </>
-        )}
-
-        <div className="flex">
-          {NAV_ITEMS.slice(0, MOBILE_MAIN_COUNT).map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              onClick={() => setMoreOpen(false)}
-              className="flex-1 flex flex-col items-center py-2 text-xs gap-1"
-              style={{ color: pathname === item.href ? "#FFFFFF" : "rgba(255,255,255,0.5)" }}
-            >
-              <span className="text-lg">{item.icon}</span>
-              <span>{item.label}</span>
-            </Link>
-          ))}
-          {/* "More" tab — highlights when any hidden page is active */}
-          <button
-            onClick={() => setMoreOpen(!moreOpen)}
-            className="flex-1 flex flex-col items-center py-2 text-xs gap-1"
-            style={{
-              color: moreOpen || NAV_ITEMS.slice(MOBILE_MAIN_COUNT).some((item) => pathname === item.href)
-                ? "#FFFFFF"
-                : "rgba(255,255,255,0.5)",
-            }}
-          >
-            <span className="text-lg">⋯</span>
-            <span>더보기</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Main content */}
-      <main className="flex-1 overflow-auto pb-20 md:pb-0">
+      <main
+        className="min-w-0 flex-1 overflow-auto md:pb-0"
+        style={{ paddingBottom: "calc(72px + env(safe-area-inset-bottom, 0px))" }}
+      >
         {children}
       </main>
+
+      <nav
+        className="fixed inset-x-0 bottom-0 z-50 grid grid-cols-4 border-t md:hidden"
+        aria-label="관리자 주요 메뉴"
+        style={{
+          backgroundColor: "#203A17",
+          borderColor: "#36502D",
+          paddingBottom: "env(safe-area-inset-bottom, 0px)",
+        }}
+      >
+        {ADMIN_NAV_ITEMS.map((item) => {
+          const isActive = activeKey === item.key;
+          return (
+            <Link
+              key={item.key}
+              href={item.href}
+              aria-current={isActive ? "page" : undefined}
+              className="flex min-h-18 flex-col items-center justify-center gap-1 px-1 text-xs font-bold focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-white"
+              style={{ color: isActive ? "#FFFFFF" : "rgba(255,255,255,0.5)" }}
+            >
+              <AdminIcon name={item.key} />
+              <span>{item.mobileLabel}</span>
+            </Link>
+          );
+        })}
+      </nav>
     </div>
   );
 }

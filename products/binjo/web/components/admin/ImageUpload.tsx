@@ -19,6 +19,17 @@ export default function ImageUpload({ value, onChange, label, hint }: ImageUploa
     const file = e.target.files?.[0];
     if (!file) return;
 
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+      setError("JPG, PNG, WebP 사진만 올릴 수 있습니다");
+      if (fileRef.current) fileRef.current.value = "";
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setError("사진은 10MB 이하로 선택해주세요");
+      if (fileRef.current) fileRef.current.value = "";
+      return;
+    }
+
     setUploading(true);
     setError("");
     setSuccess("");
@@ -69,7 +80,7 @@ export default function ImageUpload({ value, onChange, label, hint }: ImageUploa
               onError={(e) => {
                 // Show broken image indicator if URL doesn't load
                 e.currentTarget.style.display = "none";
-                setError("이미지를 불러올 수 없습니다. 버킷이 Public인지 확인해주세요.");
+                setError("저장된 사진을 불러올 수 없습니다. 다른 사진을 선택해주세요.");
               }}
             />
           </div>
@@ -82,7 +93,7 @@ export default function ImageUpload({ value, onChange, label, hint }: ImageUploa
           type="button"
           onClick={() => fileRef.current?.click()}
           disabled={uploading}
-          className="px-4 py-2.5 rounded-xl text-sm font-medium transition-opacity hover:opacity-90 disabled:opacity-50"
+          className="min-h-12 px-4 rounded-xl text-sm font-bold transition-opacity hover:opacity-90 disabled:opacity-50"
           style={{ backgroundColor: "#EDF4E8", color: "#2D5016" }}
         >
           {uploading ? "업로드 중..." : value ? "사진 변경" : "사진 선택"}
@@ -92,7 +103,7 @@ export default function ImageUpload({ value, onChange, label, hint }: ImageUploa
           <button
             type="button"
             onClick={() => { onChange(""); setSuccess(""); setError(""); }}
-            className="px-4 py-2.5 rounded-xl text-sm font-medium"
+            className="min-h-12 px-4 rounded-xl text-sm font-bold"
             style={{ backgroundColor: "#F5F1EC", color: "#9B9B9B" }}
           >
             삭제
@@ -107,13 +118,13 @@ export default function ImageUpload({ value, onChange, label, hint }: ImageUploa
       <input
         ref={fileRef}
         type="file"
-        accept="image/jpeg,image/png,image/webp,image/gif"
+        accept="image/jpeg,image/png,image/webp"
         onChange={handleUpload}
         className="hidden"
       />
 
       {error && (
-        <p className="text-xs mt-1" style={{ color: "#D4421E" }}>{error}</p>
+        <p role="alert" className="text-sm mt-2" style={{ color: "#A63218" }}>{error}</p>
       )}
     </div>
   );

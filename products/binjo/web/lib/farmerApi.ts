@@ -5,12 +5,12 @@
  * The base URL switches between local dev and production.
  */
 
-// In dev, use Next.js rewrite proxy (/backend/*) to avoid CORS.
-// In production, call the API directly.
-const API_BASE =
-  process.env.NODE_ENV === "production"
-    ? (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8002")
-    : "/backend";
+import { z } from "zod";
+
+// Default to the same-origin Next.js proxy in every environment. Deployments
+// can still opt into a public API origin, but must never leak localhost into a
+// browser bundle when that variable is omitted.
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/backend";
 
 function getToken(): string | null {
   if (typeof window === "undefined") return null;
@@ -105,13 +105,60 @@ export function isLoggedIn(): boolean {
 
 // --- Voice ---
 
+export type VoiceProcessingStatus =
+  | "uploaded"
+  | "processing"
+  | "completed"
+  | "failed";
+
+export interface VoiceStatus {
+  id: string;
+  status: VoiceProcessingStatus;
+  transcript: string | null;
+  error_message: string | null;
+}
+
+const ParsedFarmLogSchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  field_names: z.array(z.string()).default([]),
+  crop: z.string().min(1).default("사과"),
+  tasks: z.array(
+    z.object({
+      field_name: z.string().nullable().optional(),
+      stage: z.string().min(1),
+      detail: z.string().nullable().default(null),
+      duration_hours: z.number().nonnegative().nullable().default(null),
+    })
+  ),
+  chemicals: z
+    .array(
+      z.object({
+        type: z.string().min(1),
+        name: z.string().min(1),
+        amount: z.string().nullable().default(null),
+        dilution_ratio: z.string().nullable().default(null),
+        action: z.string().default("사용"),
+      })
+    )
+    .default([]),
+  weather_farmer: z.string().nullable().default(null),
+  notes: z.string().nullable().default(null),
+});
+
+export type ParsedFarmLog = z.infer<typeof ParsedFarmLogSchema>;
+
 export async function uploadVoice(audioBlob: Blob): Promise<{
   id: string;
   status: string;
   message: string;
 }> {
   const formData = new FormData();
-  formData.append("file", audioBlob, "recording.webm");
+  const filename = audioBlob.type.includes("mp4")
+    ? "recording.m4a"
+    : audioBlob.type.includes("wav")
+      ? "recording.wav"
+      : "recording.webm";
+  formData.append("file", audioBlob, filename);
   return apiFetch("/voice/upload", {
     method: "POST",
     body: formData,
@@ -125,20 +172,32 @@ export async function getVoiceResult(id: string): Promise<{
   parsed_data: ParsedFarmLog | null;
   created_at: string;
 }> {
-  return apiFetch(`/voice/${id}/result`);
+  const result = await apiFetch<{
+    id: string;
+    status: string;
+    transcript: string | null;
+    parsed_data: unknown;
+    created_at: string;
+  }>(`/voice/${id}/result`);
+
+  try {
+    return {
+      ...result,
+      parsed_data:
+        result.parsed_data === null
+          ? null
+          : ParsedFarmLogSchema.parse(result.parsed_data),
+    };
+  } catch {
+    throw new Error("AI 분석 결과 형식이 올바르지 않습니다. 다시 녹음해주세요.");
+  }
+}
+
+export async function getVoiceStatus(id: string): Promise<VoiceStatus> {
+  return apiFetch(`/voice/${id}/status`);
 }
 
 // --- Farm Logs ---
-
-export interface ParsedFarmLog {
-  date: string;
-  field_names: string[];
-  crop: string;
-  tasks: { stage: string; detail: string | null; duration_hours: number | null }[];
-  chemicals: { type: string; name: string; amount: string | null; action: string }[];
-  weather_farmer: string | null;
-  notes: string | null;
-}
 
 export interface FarmLog {
   id: string;
@@ -146,28 +205,58 @@ export interface FarmLog {
   status: string;
   crop: string;
   tasks: { id: string; field_name: string | null; stage: string; detail: string | null; duration_hours: number | null }[];
-  chemicals: { id: string; type: string; name: string; amount: string | null; action: string }[];
+  chemicals: {
+    id: string;
+    type: string;
+    name: string;
+    amount: string | null;
+    dilution_ratio: string | null;
+    action: string;
+  }[];
   weather_official: Record<string, unknown> | null;
   weather_farmer: string | null;
   notes: string | null;
   photo_urls: string[];
+  voice_recording_id: string | null;
   created_at: string;
   updated_at: string;
 }
 
-export async function createFarmLog(data: {
+export interface FarmLogWriteInput {
   voice_recording_id?: string;
   log_date: string;
   crop?: string;
   tasks: { field_name?: string; stage: string; detail?: string; duration_hours?: number }[];
-  chemicals?: { type: string; name: string; amount?: string; action?: string }[];
+  chemicals?: {
+    type: string;
+    name: string;
+    amount?: string;
+    dilution_ratio?: string;
+    action?: string;
+  }[];
   weather_farmer?: string;
   notes?: string;
-}): Promise<FarmLog> {
+}
+
+export async function createFarmLog(data: FarmLogWriteInput): Promise<FarmLog> {
   return apiFetch("/farm-logs", {
     method: "POST",
     body: JSON.stringify(data),
   });
+}
+
+export async function updateFarmLog(
+  id: string,
+  data: FarmLogWriteInput
+): Promise<FarmLog> {
+  return apiFetch(`/farm-logs/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function getFarmLog(id: string): Promise<FarmLog> {
+  return apiFetch(`/farm-logs/${id}`);
 }
 
 export async function listFarmLogs(dateFrom?: string, dateTo?: string): Promise<{
@@ -185,8 +274,9 @@ export async function confirmFarmLog(id: string): Promise<FarmLog> {
   return apiFetch(`/farm-logs/${id}/confirm`, { method: "PUT" });
 }
 
-export async function deleteFarmLog(id: string): Promise<void> {
-  return apiFetch(`/farm-logs/${id}`, { method: "DELETE" });
+export async function deleteFarmLog(id: string, draftOnly = false): Promise<void> {
+  const query = draftOnly ? "?draft_only=true" : "";
+  return apiFetch(`/farm-logs/${id}${query}`, { method: "DELETE" });
 }
 
 export async function uploadFarmLogPhotos(
@@ -226,7 +316,8 @@ export interface Field {
 }
 
 export async function listFields(): Promise<Field[]> {
-  return apiFetch("/fields");
+  const result = await apiFetch<Field[] | { fields: Field[] }>("/fields");
+  return Array.isArray(result) ? result : result.fields;
 }
 
 export async function createField(data: {
@@ -242,44 +333,24 @@ export async function createField(data: {
   });
 }
 
-// --- Pesticides (농약 안전사용기준) ---
-
-export interface PesticideInfo {
-  id: string;
-  name_kr: string;
-  name_en: string;
-  type: string;
-  safety_days: number;
-  dilution_ratio: string;
-  target: string[];
-  season: string[];
-  notes: string;
+export async function updateField(
+  id: string,
+  data: Partial<{
+    name: string;
+    area_pyeong: number;
+    crop: string;
+    address: string;
+    notes: string;
+  }>
+): Promise<Field> {
+  return apiFetch(`/fields/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
 }
 
-export interface SafeHarvestResult {
-  pesticide: string;
-  safety_days: number;
-  spray_date: string;
-  safe_harvest_date: string;
-  days_remaining: number;
-  is_safe: boolean;
-}
-
-export async function listPesticides(): Promise<PesticideInfo[]> {
-  return apiFetch("/pesticides/");
-}
-
-export async function lookupPesticide(name: string): Promise<PesticideInfo> {
-  return apiFetch(`/pesticides/lookup?name=${encodeURIComponent(name)}`);
-}
-
-export async function checkSafeHarvest(
-  sprayDate: string,
-  pesticideName: string
-): Promise<SafeHarvestResult> {
-  return apiFetch(
-    `/pesticides/safe-harvest?spray_date=${sprayDate}&pesticide_name=${encodeURIComponent(pesticideName)}`
-  );
+export async function deleteField(id: string): Promise<void> {
+  return apiFetch(`/fields/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 // --- Weather ---
@@ -299,8 +370,22 @@ export async function getCurrentWeather(): Promise<WeatherData> {
 
 // --- Export ---
 
-export function getExportUrl(dateFrom: string, dateTo: string): string {
-  const token = getToken();
+// PDF/export links carry the token in the URL, which is logged and kept in
+// browser history. Never put the 24h session token there — mint a short-lived,
+// download-scoped token right before opening the link. The backend accepts
+// ONLY this scoped token on the ?token= path.
+export async function fetchDownloadToken(): Promise<string> {
+  const data = await apiFetch<{ access_token: string }>("/auth/download-token", {
+    method: "POST",
+  });
+  return data.access_token;
+}
+
+export async function getExportUrl(
+  dateFrom: string,
+  dateTo: string
+): Promise<string> {
+  const token = await fetchDownloadToken();
   return `${API_BASE}/api/v1/export/farm-diary?date_from=${dateFrom}&date_to=${dateTo}&token=${token}`;
 }
 
@@ -478,8 +563,11 @@ export async function getMonthlyReport(
   return apiFetch(`/reports/monthly?year=${year}&month=${month}`);
 }
 
-export function getMonthlyPdfUrl(year: number, month: number): string {
-  const token = getToken();
+export async function getMonthlyPdfUrl(
+  year: number,
+  month: number
+): Promise<string> {
+  const token = await fetchDownloadToken();
   return `${API_BASE}/api/v1/reports/monthly/pdf?year=${year}&month=${month}&token=${token}`;
 }
 
@@ -570,12 +658,9 @@ export async function listCustomers(): Promise<{
 const PUBLIC_API = API_BASE;
 
 export async function publicCheckout(data: {
-  product_name: string;
-  product_id?: string;
+  product_id: string;
   quantity: number;
-  weight_option?: string;
-  unit_price: number;
-  total_amount: number;
+  weight_option: string;
   recipient_name: string;
   recipient_phone: string;
   postal_code?: string;

@@ -3,14 +3,14 @@ import type { Metadata } from "next";
 export const metadata: Metadata = {
   title: "BINJO — AI Farm Management Platform",
   description:
-    "Voice-powered farm diary, receipt OCR bookkeeping, pesticide safety, and direct orders — all designed for use with work gloves on.",
+    "Voice-powered farm diary, receipt OCR bookkeeping, farm operations, and direct orders — all designed for use with work gloves on.",
   openGraph: {
     title: "BINJO — AI Farm Management Platform",
     description:
-      "Voice-powered farm diary, receipt OCR bookkeeping, pesticide safety, and direct orders — all designed for use with work gloves on.",
+      "Voice-powered farm diary, receipt OCR bookkeeping, farm operations, and direct orders — all designed for use with work gloves on.",
     type: "website",
     locale: "en_US",
-    url: "https://binjofarm.daeseon.ai/product",
+    url: "https://solofarm.daeseon.ai/product",
     images: [
       {
         url: "/og-product.jpg",

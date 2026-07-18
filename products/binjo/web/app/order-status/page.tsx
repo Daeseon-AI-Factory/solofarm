@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, Suspense } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { publicGetOrderStatus } from "@/lib/farmerApi";
 
@@ -90,9 +91,9 @@ function OrderStatusContent() {
         style={{ backgroundColor: "#FFFFFF", borderColor: "#E5E2DB" }}
       >
         <div className="max-w-lg mx-auto flex items-center gap-3">
-          <a href="/" className="text-xl" style={{ color: "#2D5016" }}>
+          <Link href="/" className="text-xl" style={{ color: "#2D5016" }}>
             &#8592;
-          </a>
+          </Link>
           <h1 className="text-lg font-bold" style={{ color: "#2D5016" }}>
             주문 조회
           </h1>

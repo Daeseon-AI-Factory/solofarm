@@ -3,9 +3,10 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { requireAdmin, unauthorizedResponse } from "@/lib/auth";
+import { ImageUrlSchema } from "@/lib/imageUrl";
 
 const AddPhotoSchema = z.object({
-  image_url: z.string().url().max(500),
+  image_url: ImageUrlSchema,
   caption: z.string().max(200).optional().nullable(),
   taken_at: z.string().optional().nullable(),
   sort_order: z.number().int().optional(),

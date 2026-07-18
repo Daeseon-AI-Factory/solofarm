@@ -21,28 +21,26 @@ export default function YoutubeSection({ youtubeUrl }: YoutubeSectionProps) {
   if (!videoId) return null;
 
   return (
-    <section className="py-16 md:py-24 px-4" style={{ backgroundColor: "#FDFBF7" }}>
-      <div className="max-w-3xl mx-auto">
-        <div className="text-center mb-10">
-          <h2
-            className="text-2xl md:text-3xl font-bold mb-2"
-            style={{ color: "#2D5016" }}
-          >
+    <section className="bg-[#FDFBF7] px-4 py-16 md:py-24">
+      <div className="mx-auto max-w-3xl">
+        <div className="mb-9 md:mb-12">
+          <p className="mb-2 text-xs font-bold tracking-[0.16em] text-[#B9381B]">
+            FARM VIDEO
+          </p>
+          <h2 className="text-3xl font-bold tracking-[-0.04em] text-[#244C19] md:text-4xl">
             농장 영상
           </h2>
-          <div
-            className="w-12 h-1 mx-auto rounded"
-            style={{ backgroundColor: "#D4421E" }}
-          />
         </div>
 
-        <div className="relative w-full rounded-2xl overflow-hidden shadow-lg" style={{ paddingBottom: "56.25%" }}>
+        <div className="relative aspect-video w-full overflow-hidden rounded-[1.5rem] bg-[#17370F] shadow-lg">
           <iframe
             className="absolute inset-0 w-full h-full"
-            src={`https://www.youtube.com/embed/${videoId}`}
+            src={`https://www.youtube-nocookie.com/embed/${videoId}`}
             title="빈조농장 영상"
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
             allowFullScreen
+            loading="lazy"
+            referrerPolicy="strict-origin-when-cross-origin"
           />
         </div>
       </div>

@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState, useEffect, useCallback, useRef } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import VoiceRecorder from "@/components/farmer/VoiceRecorder";
 import ReviewCard from "@/components/farmer/ReviewCard";
 import {
@@ -10,15 +10,30 @@ import {
   createFarmLog,
   uploadFarmLogPhotos,
   uploadVoice,
+  getVoiceStatus,
   getVoiceResult,
-  listPesticides,
-  checkSafeHarvest,
+  confirmFarmLog,
+  deleteFarmLog,
+  updateFarmLog,
+  getFarmLog,
   type WeatherData,
   type Field,
+  type FarmLog,
+  type FarmLogWriteInput,
   type ParsedFarmLog,
-  type PesticideInfo,
-  type SafeHarvestResult,
 } from "@/lib/farmerApi";
+import { localDateISO } from "@/lib/farmerDate";
+import {
+  FARMER_RECORD_PREFERENCES_KEY,
+  getYesterdayDate,
+  normalizeRecordDate,
+  parseRecordPreferences,
+  serializeRecordPreferences,
+} from "@/lib/farmerWorkflow";
+import {
+  FARM_LOG_PHOTO_UPLOAD_BUILD_ENABLED,
+  VOICE_RECORDING_BUILD_ENABLED,
+} from "@/lib/featureFlags";
 
 // --- Types ---
 
@@ -38,6 +53,12 @@ interface TaskEntry {
   fertilizerAmount?: string;
 }
 
+interface TaskDefinition {
+  stage: string;
+  emoji: string;
+  label: string;
+}
+
 // Quick task button definitions — common apple farming tasks
 const TASK_BUTTONS = [
   { stage: "방제", emoji: "💊", label: "방제" },
@@ -50,6 +71,9 @@ const TASK_BUTTONS = [
   { stage: "기타", emoji: "📝", label: "기타" },
 ] as const;
 
+const DETAIL_FIRST_STAGES = new Set(["방제", "시비", "기타"]);
+const QUICK_DURATION_OPTIONS = [0.5, 1, 2, 4] as const;
+
 // Sky condition → emoji mapping for weather display
 const SKY_EMOJI: Record<string, string> = {
   맑음: "☀️",
@@ -57,17 +81,141 @@ const SKY_EMOJI: Record<string, string> = {
   흐림: "☁️",
 };
 
+const VOICE_POLL_INTERVAL_MS = 2_000;
+const VOICE_POLL_MAX_ATTEMPTS = 30;
+const VOICE_POLL_MAX_CONSECUTIVE_ERRORS = 3;
+type WriteChemical = NonNullable<FarmLogWriteInput["chemicals"]>[number];
+
+function toWriteChemical(chemical: FarmLog["chemicals"][number]): WriteChemical {
+  return {
+    type: chemical.type,
+    name: chemical.name,
+    amount: chemical.amount || undefined,
+    dilution_ratio: chemical.dilution_ratio || undefined,
+    action: chemical.action,
+  };
+}
+
+function hydrateLogForEditing(log: FarmLog): {
+  tasks: TaskEntry[];
+  preservedChemicals: WriteChemical[];
+} {
+  const pesticides = log.chemicals
+    .filter((chemical) => chemical.type === "농약")
+    .map(toWriteChemical);
+  const fertilizers = log.chemicals
+    .filter((chemical) => chemical.type === "비료")
+    .map(toWriteChemical);
+  const preservedChemicals = log.chemicals
+    .filter((chemical) => chemical.type !== "농약" && chemical.type !== "비료")
+    .map(toWriteChemical);
+
+  const tasks = log.tasks.map((task, index) => {
+    const pesticide = task.stage === "방제" ? pesticides.shift() : undefined;
+    const fertilizer = task.stage === "시비" ? fertilizers.shift() : undefined;
+    const definition = TASK_BUTTONS.find((item) => item.stage === task.stage);
+
+    return {
+      id: `existing-${task.id || index}`,
+      stage: task.stage,
+      emoji: definition?.emoji || "📝",
+      fieldName: task.field_name || undefined,
+      detail: task.detail || undefined,
+      durationHours: task.duration_hours ?? 1,
+      chemicalName: pesticide?.name,
+      dilutionRatio: pesticide?.dilution_ratio,
+      sprayAmount: pesticide?.amount,
+      fertilizerName: fertilizer?.name,
+      fertilizerAmount: fertilizer?.amount,
+    };
+  });
+
+  return {
+    tasks,
+    preservedChemicals: [...preservedChemicals, ...pesticides, ...fertilizers],
+  };
+}
+
+function PhotoPreview({
+  photo,
+  index,
+  onRemove,
+}: {
+  photo: File;
+  index: number;
+  onRemove: (index: number) => void;
+}) {
+  const imageRef = useRef<HTMLImageElement>(null);
+
+  useEffect(() => {
+    const previewUrl = URL.createObjectURL(photo);
+    if (imageRef.current) imageRef.current.src = previewUrl;
+
+    return () => {
+      URL.revokeObjectURL(previewUrl);
+    };
+  }, [photo]);
+
+  return (
+    <div className="relative w-20 h-20">
+      <img
+        ref={imageRef}
+        alt={`사진 ${index + 1}`}
+        className="w-full h-full rounded-xl object-cover"
+      />
+      <button
+        type="button"
+        onClick={() => onRemove(index)}
+        className="absolute -right-3 -top-3 flex h-12 w-12 items-center justify-center rounded-full text-base text-white shadow"
+        style={{ backgroundColor: "#D4421E" }}
+        aria-label={`사진 ${index + 1} 삭제`}
+      >
+        ✕
+      </button>
+    </div>
+  );
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeParsedFarmLog(data: ParsedFarmLog): ParsedFarmLog {
+  // A single detected field can safely apply to every task. When multiple fields
+  // are mentioned, leave each task unassigned so the farmer must choose instead
+  // of letting the AI invent an association.
+  const defaultField = data.field_names.length === 1 ? data.field_names[0] : null;
+  return {
+    ...data,
+    tasks: data.tasks.map((task) => ({
+      ...task,
+      field_name: task.field_name ?? defaultField,
+    })),
+  };
+}
+
 type InputMode = "manual" | "voice";
 type PageState = "entry" | "uploading" | "review" | "saving" | "saved";
 
 // --- Component ---
 
-export default function RecordPage() {
+function RecordPageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const requestedEditId = searchParams.get("edit");
+  const requestedDate = searchParams.get("date");
+  const initialRequestedDate = normalizeRecordDate(requestedDate);
 
   // --- Top-level state ---
   const [inputMode, setInputMode] = useState<InputMode>("manual");
   const [pageState, setPageState] = useState<PageState>("entry");
+  const [logDate, setLogDate] = useState(() => initialRequestedDate);
+  const [logCrop, setLogCrop] = useState("사과");
+  const [manualLogId, setManualLogId] = useState<string | null>(requestedEditId);
+  const [preservedChemicals, setPreservedChemicals] = useState<WriteChemical[]>([]);
+  const [editLoading, setEditLoading] = useState(Boolean(requestedEditId));
+  const [editLoadError, setEditLoadError] = useState<string | null>(null);
+  const [completionWarning, setCompletionWarning] = useState<string | null>(null);
 
   // --- Weather ---
   const [weather, setWeather] = useState<WeatherData | null>(null);
@@ -76,17 +224,17 @@ export default function RecordPage() {
   // --- Fields ---
   const [fields, setFields] = useState<Field[]>([]);
   const [fieldsLoading, setFieldsLoading] = useState(true);
-
-  // --- Pesticides ---
-  const [pesticides, setPesticides] = useState<PesticideInfo[]>([]);
-  const [pesticideMatches, setPesticideMatches] = useState<PesticideInfo[]>([]);
-  const [safetyWarning, setSafetyWarning] = useState<SafeHarvestResult | null>(null);
+  const [fieldsError, setFieldsError] = useState<string | null>(null);
 
   // --- Task detail panel ---
-  const [activeTask, setActiveTask] = useState<typeof TASK_BUTTONS[number] | null>(null);
+  const [activeTask, setActiveTask] = useState<TaskDefinition | null>(null);
   const [selectedFieldName, setSelectedFieldName] = useState<string | null>(null);
   const [detailText, setDetailText] = useState("");
   const [durationHours, setDurationHours] = useState(1);
+  const [defaultFieldName, setDefaultFieldName] = useState<string | null>(null);
+  const [defaultDurationHours, setDefaultDurationHours] = useState(1);
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [quickAddedTask, setQuickAddedTask] = useState<TaskEntry | null>(null);
   // 방제 fields
   const [chemicalName, setChemicalName] = useState("");
   const [dilutionRatio, setDilutionRatio] = useState("");
@@ -109,12 +257,41 @@ export default function RecordPage() {
   const [parsedData, setParsedData] = useState<ParsedFarmLog | null>(null);
   const [transcript, setTranscript] = useState<string | null>(null);
   const [recordingId, setRecordingId] = useState<string | null>(null);
+  const [draftLogId, setDraftLogId] = useState<string | null>(null);
+  const [isDiscardingVoiceDraft, setIsDiscardingVoiceDraft] = useState(false);
+  const voicePollGenerationRef = useRef(0);
 
   // --- Error ---
   const [error, setError] = useState<string | null>(null);
 
-  // --- Fetch weather + fields on mount ---
+  const loadFields = useCallback(async () => {
+    setFieldsLoading(true);
+    setFieldsError(null);
+    try {
+      const loadedFields = await listFields();
+      setFields(loadedFields);
+      setDefaultFieldName((current) => {
+        if (current && loadedFields.some((field) => field.name === current)) return current;
+        return loadedFields.length === 1 ? loadedFields[0].name : null;
+      });
+    } catch (err) {
+      console.error("[RecordPage] Failed to fetch fields:", err);
+      setFieldsError(
+        err instanceof Error ? err.message : "필지 목록을 불러오지 못했습니다."
+      );
+    } finally {
+      setFieldsLoading(false);
+    }
+  }, []);
+
+  // --- Fetch weather + fields and restore fast-entry preferences on mount ---
   useEffect(() => {
+    const storedPreferences = parseRecordPreferences(
+      window.localStorage.getItem(FARMER_RECORD_PREFERENCES_KEY)
+    );
+    setDefaultFieldName(storedPreferences.fieldName);
+    setDefaultDurationHours(storedPreferences.durationHours);
+
     getCurrentWeather()
       .then(setWeather)
       .catch((err) => {
@@ -122,84 +299,122 @@ export default function RecordPage() {
       })
       .finally(() => setWeatherLoading(false));
 
-    listFields()
-      .then(setFields)
-      .catch((err) => {
-        console.error("[RecordPage] Failed to fetch fields:", err);
-      })
-      .finally(() => setFieldsLoading(false));
+    void loadFields();
 
-    listPesticides()
-      .then(setPesticides)
-      .catch((err) => {
-        console.error("[RecordPage] Failed to fetch pesticides:", err);
-      });
-  }, []);
+    return () => {
+      // Invalidate any in-flight voice polling when the page unmounts.
+      voicePollGenerationRef.current += 1;
+    };
+  }, [loadFields]);
 
-  // --- Pesticide autocomplete ---
-  const handleChemicalNameChange = (value: string) => {
-    setChemicalName(value);
-    setSafetyWarning(null);
-    if (value.length >= 1) {
-      const matches = pesticides.filter(
-        (p) => p.name_kr.includes(value) || value.includes(p.name_kr)
-      );
-      setPesticideMatches(matches);
-    } else {
-      setPesticideMatches([]);
+  useEffect(() => {
+    if (!requestedEditId) {
+      setLogDate(normalizeRecordDate(requestedDate));
     }
-  };
+  }, [requestedDate, requestedEditId]);
 
-  const selectPesticide = (p: PesticideInfo) => {
-    setChemicalName(p.name_kr);
-    setDilutionRatio(p.dilution_ratio);
-    setPesticideMatches([]);
-    // Check safe harvest date
-    const today = new Date().toISOString().split("T")[0];
-    checkSafeHarvest(today, p.name_kr)
-      .then(setSafetyWarning)
-      .catch(() => {});
-  };
+  useEffect(() => {
+    if (!requestedEditId) {
+      setEditLoading(false);
+      setEditLoadError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setEditLoading(true);
+    setEditLoadError(null);
+    setError(null);
+
+    getFarmLog(requestedEditId)
+      .then((log) => {
+        if (cancelled) return;
+        const hydrated = hydrateLogForEditing(log);
+        voicePollGenerationRef.current += 1;
+        setInputMode("manual");
+        setPageState("entry");
+        setManualLogId(log.id);
+        setLogDate(log.log_date);
+        setLogCrop(log.crop || "사과");
+        setTasks(hydrated.tasks);
+        setQuickAddedTask(null);
+        setPreservedChemicals(hydrated.preservedChemicals);
+        setNotes(log.notes || "");
+        setPhotos([]);
+        setCompletionWarning(null);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setManualLogId(null);
+        setEditLoadError(
+          err instanceof Error ? err.message : "수정할 기록을 불러오지 못했습니다."
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setEditLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [requestedEditId]);
 
   // --- Today's date in Korean ---
-  const todayFormatted = new Date().toLocaleDateString("ko-KR", {
+  const todayDate = localDateISO();
+  const yesterdayDate = getYesterdayDate();
+  const dateFormatted = new Date(`${logDate}T00:00:00`).toLocaleDateString("ko-KR", {
     year: "numeric",
     month: "long",
     day: "numeric",
     weekday: "long",
   });
-  // ISO date for API
-  const todayISO = new Date().toISOString().slice(0, 10);
 
   // --- Weather display ---
   const weatherSummary = weather
     ? `${SKY_EMOJI[weather.sky || ""] || "🌤️"} ${weather.temperature ?? "--"}°C · ${weather.sky || ""}${weather.humidity ? ` · 습도 ${weather.humidity}%` : ""}`
     : null;
 
+  const selectLogDate = (date: string) => {
+    const normalizedDate = normalizeRecordDate(date, logDate);
+    setLogDate(normalizedDate);
+    setParsedData((current) =>
+      current ? { ...current, date: normalizedDate } : current
+    );
+  };
+
   // --- Task detail panel helpers ---
 
-  const openTaskPanel = (task: typeof TASK_BUTTONS[number]) => {
+  const rememberQuickDefaults = (fieldName: string | null, hours: number) => {
+    setDefaultFieldName(fieldName);
+    setDefaultDurationHours(hours);
+    window.localStorage.setItem(
+      FARMER_RECORD_PREFERENCES_KEY,
+      serializeRecordPreferences({ fieldName, durationHours: hours })
+    );
+  };
+
+  const openTaskPanel = (task: TaskDefinition, existingTask?: TaskEntry) => {
     setActiveTask(task);
-    // Reset detail form
-    setSelectedFieldName(null);
-    setDetailText("");
-    setDurationHours(1);
-    setChemicalName("");
-    setDilutionRatio("");
-    setSprayAmount("");
-    setFertilizerName("");
-    setFertilizerAmount("");
+    setEditingTaskId(existingTask?.id ?? null);
+    setSelectedFieldName(existingTask?.fieldName ?? defaultFieldName);
+    setDetailText(existingTask?.detail ?? "");
+    setDurationHours(existingTask?.durationHours ?? defaultDurationHours);
+    setChemicalName(existingTask?.chemicalName ?? "");
+    setDilutionRatio(existingTask?.dilutionRatio ?? "");
+    setSprayAmount(existingTask?.sprayAmount ?? "");
+    setFertilizerName(existingTask?.fertilizerName ?? "");
+    setFertilizerAmount(existingTask?.fertilizerAmount ?? "");
   };
 
   const closeTaskPanel = () => {
     setActiveTask(null);
+    setEditingTaskId(null);
   };
 
   const addTaskToList = () => {
     if (!activeTask) return;
 
     const entry: TaskEntry = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      id: editingTaskId || `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       stage: activeTask.stage,
       emoji: activeTask.emoji,
       fieldName: selectedFieldName || undefined,
@@ -212,12 +427,41 @@ export default function RecordPage() {
       fertilizerAmount: fertilizerAmount.trim() || undefined,
     };
 
-    setTasks((prev) => [...prev, entry]);
+    setTasks((previous) =>
+      editingTaskId
+        ? previous.map((task) => (task.id === editingTaskId ? entry : task))
+        : [...previous, entry]
+    );
+    rememberQuickDefaults(selectedFieldName, durationHours);
+    setQuickAddedTask(null);
     closeTaskPanel();
+  };
+
+  const addQuickTask = (task: TaskDefinition) => {
+    const entry: TaskEntry = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      stage: task.stage,
+      emoji: task.emoji,
+      fieldName: defaultFieldName || undefined,
+      durationHours: defaultDurationHours,
+    };
+    setTasks((previous) => [...previous, entry]);
+    setQuickAddedTask(entry);
+    rememberQuickDefaults(defaultFieldName, defaultDurationHours);
+  };
+
+  const editTask = (task: TaskEntry) => {
+    const definition = TASK_BUTTONS.find((item) => item.stage === task.stage) ?? {
+      stage: task.stage,
+      emoji: task.emoji,
+      label: task.stage,
+    };
+    openTaskPanel(definition, task);
   };
 
   const removeTask = (id: string) => {
     setTasks((prev) => prev.filter((t) => t.id !== id));
+    setQuickAddedTask((current) => (current?.id === id ? null : current));
   };
 
   // --- Photo handling ---
@@ -242,6 +486,8 @@ export default function RecordPage() {
 
     setPageState("saving");
     setError(null);
+    let logId = manualLogId;
+    let draftSaved = false;
 
     try {
       // Build chemicals array from 방제 tasks
@@ -251,6 +497,7 @@ export default function RecordPage() {
           type: "농약" as const,
           name: t.chemicalName!,
           amount: t.sprayAmount || undefined,
+          dilution_ratio: t.dilutionRatio || undefined,
           action: "살포",
         }));
 
@@ -264,34 +511,54 @@ export default function RecordPage() {
           action: "시비",
         }));
 
-      const log = await createFarmLog({
-        log_date: todayISO,
-        crop: "사과", // Default crop — apple farm
+      const logInput: FarmLogWriteInput = {
+        log_date: logDate,
+        crop: logCrop,
         tasks: tasks.map((t) => ({
           field_name: t.fieldName || undefined,
           stage: t.stage,
           detail: t.detail || undefined,
           duration_hours: t.durationHours || undefined,
         })),
-        chemicals: [...chemicals, ...fertilizers].length > 0
-          ? [...chemicals, ...fertilizers]
+        chemicals: [...chemicals, ...fertilizers, ...preservedChemicals].length > 0
+          ? [...chemicals, ...fertilizers, ...preservedChemicals]
           : undefined,
         notes: notes.trim() || undefined,
-      });
+      };
 
-      // Upload photos after creating the log — needs the log ID
+      if (logId) {
+        await updateFarmLog(logId, logInput);
+      } else {
+        const log = await createFarmLog(logInput);
+        logId = log.id;
+        setManualLogId(log.id);
+      }
+      draftSaved = true;
+
       if (photos.length > 0) {
         try {
-          await uploadFarmLogPhotos(log.id, photos);
+          await uploadFarmLogPhotos(logId, photos);
         } catch (photoErr) {
-          // Log saved but photos failed — don't block the save
           console.error("[record] Photo upload failed:", photoErr);
+          setCompletionWarning(
+            "기록은 저장됐지만 사진 업로드에 실패했습니다. 기록 상세에서 사진을 다시 확인해주세요."
+          );
+        } finally {
+          // A confirmation retry must not attach the same files twice.
+          setPhotos([]);
         }
       }
 
+      await confirmFarmLog(logId);
       setPageState("saved");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "저장에 실패했습니다.");
+      setError(
+        draftSaved
+          ? "기록은 임시 저장됐지만 확인 완료에 실패했습니다. 다시 누르면 같은 기록의 확인을 재시도합니다."
+          : err instanceof Error
+            ? err.message
+            : "저장에 실패했습니다."
+      );
       setPageState("entry");
     }
   };
@@ -299,90 +566,258 @@ export default function RecordPage() {
   // --- Voice mode handlers ---
 
   const handleRecordingComplete = useCallback(async (blob: Blob) => {
+    if (!VOICE_RECORDING_BUILD_ENABLED) return;
+    const pollGeneration = ++voicePollGenerationRef.current;
     setPageState("uploading");
     setError(null);
+    setDraftLogId(null);
+    setCompletionWarning(null);
 
     try {
       const result = await uploadVoice(blob);
       setRecordingId(result.id);
 
-      if (result.status === "completed") {
-        const voiceResult = await getVoiceResult(result.id);
-        setParsedData(voiceResult.parsed_data);
-        setTranscript(voiceResult.transcript);
-        setPageState("review");
-      } else {
-        setError(result.message || "처리에 실패했습니다.");
-        setPageState("entry");
+      if (result.status === "failed") {
+        throw new Error(result.message || "음성 처리에 실패했습니다.");
       }
+
+      if (result.status !== "completed") {
+        let completed = false;
+        let consecutiveErrors = 0;
+        for (let attempt = 0; attempt < VOICE_POLL_MAX_ATTEMPTS; attempt += 1) {
+          if (pollGeneration !== voicePollGenerationRef.current) return;
+
+          let status;
+          try {
+            status = await getVoiceStatus(result.id);
+            consecutiveErrors = 0;
+          } catch (statusError) {
+            consecutiveErrors += 1;
+            if (consecutiveErrors >= VOICE_POLL_MAX_CONSECUTIVE_ERRORS) {
+              throw statusError;
+            }
+            await wait(VOICE_POLL_INTERVAL_MS);
+            continue;
+          }
+
+          if (status.status === "completed") {
+            completed = true;
+            break;
+          }
+          if (status.status === "failed") {
+            throw new Error(status.error_message || "음성 처리에 실패했습니다.");
+          }
+          await wait(VOICE_POLL_INTERVAL_MS);
+        }
+
+        if (!completed) {
+          throw new Error("음성 분석이 60초 안에 끝나지 않았습니다. 잠시 후 다시 시도해주세요.");
+        }
+      }
+
+      if (pollGeneration !== voicePollGenerationRef.current) return;
+      const voiceResult = await getVoiceResult(result.id);
+      if (!voiceResult.parsed_data) {
+        throw new Error("AI 분석 결과가 비어 있습니다. 다시 녹음해주세요.");
+      }
+      setParsedData({
+        ...normalizeParsedFarmLog(voiceResult.parsed_data),
+        // A date explicitly selected before recording is authoritative.
+        date: logDate,
+      });
+      setTranscript(voiceResult.transcript);
+      setPageState("review");
     } catch (err) {
+      if (pollGeneration !== voicePollGenerationRef.current) return;
       setError(err instanceof Error ? err.message : "음성 업로드에 실패했습니다.");
       setPageState("entry");
     }
-  }, []);
+  }, [logDate]);
 
   const handleVoiceConfirm = async () => {
     if (!parsedData) return;
 
-    setPageState("saving");
-    try {
-      const log = await createFarmLog({
-        voice_recording_id: recordingId || undefined,
-        log_date: parsedData.date,
-        crop: parsedData.crop,
-        tasks: parsedData.tasks.map((t) => ({
-          stage: t.stage,
-          detail: t.detail || undefined,
-          duration_hours: t.duration_hours || undefined,
-        })),
-        chemicals: parsedData.chemicals.map((c) => ({
-          type: c.type,
-          name: c.name,
-          amount: c.amount || undefined,
-          action: c.action,
-        })),
-        weather_farmer: parsedData.weather_farmer || undefined,
-        notes: parsedData.notes || undefined,
-      });
+    if (parsedData.tasks.length === 0) {
+      setError("작업을 1개 이상 확인해주세요.");
+      return;
+    }
+    if (
+      parsedData.field_names.length > 0 &&
+      parsedData.tasks.some((task) => !task.field_name)
+    ) {
+      setError("여러 필지가 감지되었습니다. 각 작업의 필지를 선택해주세요.");
+      return;
+    }
 
-      // Upload photos if any were selected before voice recording
-      if (photos.length > 0) {
-        try {
-          await uploadFarmLogPhotos(log.id, photos);
-        } catch (photoErr) {
-          console.error("[record] Photo upload failed:", photoErr);
+    setPageState("saving");
+    setError(null);
+    let logId = draftLogId;
+    let draftSaved = false;
+    const logInput = {
+      voice_recording_id: recordingId || undefined,
+      log_date: parsedData.date,
+      crop: parsedData.crop,
+      tasks: parsedData.tasks.map((task) => ({
+        field_name: task.field_name || undefined,
+        stage: task.stage,
+        detail: task.detail || undefined,
+        duration_hours: task.duration_hours || undefined,
+      })),
+      chemicals: parsedData.chemicals.map((chemical) => ({
+        type: chemical.type,
+        name: chemical.name,
+        amount: chemical.amount || undefined,
+        dilution_ratio: chemical.dilution_ratio || undefined,
+        action: chemical.action,
+      })),
+      weather_farmer: parsedData.weather_farmer || undefined,
+      notes: parsedData.notes || undefined,
+    };
+
+    try {
+      if (!logId) {
+        const log = await createFarmLog(logInput);
+        logId = log.id;
+        setDraftLogId(logId);
+        draftSaved = true;
+
+        // Photos are attached only on first creation so a confirmation retry
+        // cannot duplicate the same uploads.
+        if (photos.length > 0) {
+          try {
+            await uploadFarmLogPhotos(logId, photos);
+          } catch (photoErr) {
+            console.error("[record] Photo upload failed:", photoErr);
+            setCompletionWarning(
+              "기록은 저장됐지만 사진 업로드에 실패했습니다. 기록 상세에서 사진을 다시 확인해주세요."
+            );
+          } finally {
+            setPhotos([]);
+          }
         }
+      } else {
+        // A failed confirmation leaves a server-side draft. Sync the current
+        // review before retrying so the farmer confirms what is on screen.
+        await updateFarmLog(logId, logInput);
+        draftSaved = true;
       }
 
+      await confirmFarmLog(logId);
+      setDraftLogId(null);
       setPageState("saved");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "저장에 실패했습니다.");
+      setError(
+        draftSaved
+          ? "기록은 임시 저장됐지만 확인 완료에 실패했습니다. 다시 누르면 중복 생성 없이 확인을 재시도합니다."
+          : err instanceof Error
+            ? err.message
+            : "저장에 실패했습니다."
+      );
       setPageState("review");
     }
   };
 
-  const handleVoiceDiscard = () => {
-    setPageState("entry");
-    setParsedData(null);
-    setTranscript(null);
-    setRecordingId(null);
+  const handleVoiceDiscard = async () => {
+    if (isDiscardingVoiceDraft) return;
+
+    voicePollGenerationRef.current += 1;
+    setIsDiscardingVoiceDraft(true);
     setError(null);
+    try {
+      if (draftLogId) {
+        await deleteFarmLog(draftLogId, true);
+      }
+      setPageState("entry");
+      setParsedData(null);
+      setTranscript(null);
+      setRecordingId(null);
+      setDraftLogId(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "임시 기록 삭제에 실패했습니다.");
+    } finally {
+      setIsDiscardingVoiceDraft(false);
+    }
   };
 
   const handleReset = () => {
+    voicePollGenerationRef.current += 1;
+    if (requestedEditId) router.replace("/farmer/record");
+    setInputMode("manual");
     setPageState("entry");
+    setLogDate(normalizeRecordDate(requestedDate));
+    setLogCrop("사과");
+    setManualLogId(null);
+    setPreservedChemicals([]);
+    setEditLoadError(null);
+    setCompletionWarning(null);
     setTasks([]);
+    setQuickAddedTask(null);
+    setEditingTaskId(null);
     setPhotos([]);
     setNotes("");
     setError(null);
     setParsedData(null);
     setTranscript(null);
     setRecordingId(null);
+    setDraftLogId(null);
+    setIsDiscardingVoiceDraft(false);
   };
 
   // ============================
   // Render
   // ============================
+
+  if (editLoading) {
+    return (
+      <div
+        className="min-h-screen flex flex-col items-center justify-center p-6"
+        style={{ backgroundColor: "#F5F1EC" }}
+      >
+        <div
+          className="w-16 h-16 rounded-full border-4 border-t-transparent animate-spin mb-4"
+          style={{ borderColor: "#2D5016", borderTopColor: "transparent" }}
+        />
+        <p className="text-sm font-medium" style={{ color: "#2D5016" }}>
+          기록을 불러오는 중...
+        </p>
+      </div>
+    );
+  }
+
+  if (requestedEditId && !manualLogId) {
+    return (
+      <div
+        className="min-h-screen flex flex-col items-center justify-center p-6"
+        style={{ backgroundColor: "#F5F1EC" }}
+      >
+        <div
+          role="alert"
+          className="w-full max-w-sm rounded-2xl p-5 text-sm mb-4"
+          style={{ backgroundColor: "#FEF3E2", color: "#D4421E" }}
+        >
+          ⚠️ {editLoadError || "수정할 기록을 불러오지 못했습니다."}
+        </div>
+        <div className="flex gap-3 w-full max-w-sm">
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="flex-1 py-4 rounded-2xl font-medium text-sm"
+            style={{ backgroundColor: "#FFFFFF", color: "#2D5016" }}
+          >
+            다시 시도
+          </button>
+          <button
+            type="button"
+            onClick={() => router.push("/farmer/logs")}
+            className="flex-1 py-4 rounded-2xl font-bold text-sm text-white"
+            style={{ backgroundColor: "#2D5016" }}
+          >
+            기록 목록
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // --- Success screen ---
   if (pageState === "saved") {
@@ -398,8 +833,19 @@ export default function RecordPage() {
           저장되었습니다!
         </p>
         <p className="text-sm mb-10" style={{ color: "#6B6B6B" }}>
-          오늘의 영농일지가 기록되었습니다
+          {requestedEditId
+            ? "영농일지가 수정되었습니다"
+            : "영농일지가 저장되었습니다"}
         </p>
+        {completionWarning && (
+          <div
+            role="alert"
+            className="w-full max-w-xs rounded-xl p-4 text-sm mb-5"
+            style={{ backgroundColor: "#FEF3E2", color: "#D4421E" }}
+          >
+            ⚠️ {completionWarning}
+          </div>
+        )}
         <div className="flex gap-3 w-full max-w-xs">
           <button
             onClick={handleReset}
@@ -421,14 +867,26 @@ export default function RecordPage() {
   }
 
   return (
-    <div className="min-h-screen pb-32" style={{ backgroundColor: "#F5F1EC" }}>
+    <div
+      className="min-h-screen pb-56"
+      style={
+        {
+          backgroundColor: "#F5F1EC",
+          "--farmer-nav-height": "72px",
+        } as React.CSSProperties
+      }
+    >
       {/* ============ HEADER ============ */}
       <div className="px-4 pt-6 pb-4" style={{ backgroundColor: "#FFFFFF" }}>
         <h1 className="text-xl font-bold mb-1" style={{ color: "#2D5016" }}>
-          오늘 하루 기록
+          {requestedEditId
+            ? "영농일지 수정"
+            : logDate === todayDate
+              ? "오늘 작업 기록"
+              : "지난 작업 기록"}
         </h1>
         <p className="text-sm mb-3" style={{ color: "#6B6B6B" }}>
-          {todayFormatted}
+          {dateFormatted}
         </p>
 
         {/* Weather */}
@@ -445,13 +903,61 @@ export default function RecordPage() {
           )}
         </div>
 
+        <div className="mt-4">
+          <p className="mb-2 text-sm font-bold" style={{ color: "#384832" }}>
+            작업 날짜
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => selectLogDate(todayDate)}
+              className="min-h-12 rounded-xl text-base font-bold"
+              style={{
+                backgroundColor: logDate === todayDate ? "#2D5016" : "#F5F1EC",
+                color: logDate === todayDate ? "#FFFFFF" : "#2D5016",
+              }}
+              aria-pressed={logDate === todayDate}
+            >
+              오늘
+            </button>
+            <button
+              type="button"
+              onClick={() => selectLogDate(yesterdayDate)}
+              className="min-h-12 rounded-xl text-base font-bold"
+              style={{
+                backgroundColor: logDate === yesterdayDate ? "#2D5016" : "#F5F1EC",
+                color: logDate === yesterdayDate ? "#FFFFFF" : "#2D5016",
+              }}
+              aria-pressed={logDate === yesterdayDate}
+            >
+              어제
+            </button>
+          </div>
+          <label className="mt-2 block">
+            <span className="sr-only">다른 작업 날짜 선택</span>
+            <input
+              type="date"
+              value={logDate}
+              onChange={(event) => selectLogDate(event.target.value)}
+              className="min-h-13 w-full rounded-xl border px-4 text-base font-semibold"
+              style={{ borderColor: "#D7DDD2", backgroundColor: "#FFFFFF", color: "#243D18" }}
+            />
+          </label>
+        </div>
+
         {/* Mode toggle — manual / voice */}
-        <div
-          className="mt-4 flex rounded-xl overflow-hidden"
-          style={{ backgroundColor: "#F5F1EC" }}
-        >
+        {VOICE_RECORDING_BUILD_ENABLED && !requestedEditId && (
+          <div
+            className="mt-4 flex rounded-xl overflow-hidden"
+            style={{ backgroundColor: "#F5F1EC" }}
+          >
           <button
             onClick={() => {
+              if (draftLogId) {
+                setError("임시 저장된 음성 기록의 확인을 먼저 완료하거나 다시 녹음해주세요.");
+                return;
+              }
+              voicePollGenerationRef.current += 1;
               setInputMode("manual");
               if (pageState !== "entry") setPageState("entry");
             }}
@@ -465,7 +971,12 @@ export default function RecordPage() {
           </button>
           <button
             onClick={() => {
+              if (draftLogId) {
+                setError("임시 저장된 음성 기록의 확인을 완료하거나 다시 녹음을 선택해주세요.");
+                return;
+              }
               setInputMode("voice");
+              setError(null);
               if (pageState !== "entry") setPageState("entry");
             }}
             className="flex-1 py-3 text-sm font-semibold transition-colors"
@@ -476,11 +987,12 @@ export default function RecordPage() {
           >
             🎙️ 음성 기록
           </button>
-        </div>
+          </div>
+        )}
       </div>
 
       {/* ============ ERROR ============ */}
-      {error && (
+      {error && !(inputMode === "voice" && pageState === "review") && (
         <div className="mx-4 mt-4">
           <div
             className="rounded-xl p-4 text-sm flex items-start gap-2"
@@ -493,7 +1005,7 @@ export default function RecordPage() {
       )}
 
       {/* ============ VOICE MODE ============ */}
-      {inputMode === "voice" && (
+      {VOICE_RECORDING_BUILD_ENABLED && inputMode === "voice" && (
         <div className="px-4 mt-6">
           {pageState === "entry" && (
             <VoiceRecorder
@@ -519,9 +1031,13 @@ export default function RecordPage() {
             <ReviewCard
               data={parsedData}
               transcript={transcript}
+              availableFields={fields}
+              onChange={setParsedData}
               onConfirm={handleVoiceConfirm}
               onDiscard={handleVoiceDiscard}
               loading={false}
+              discarding={isDiscardingVoiceDraft}
+              error={error}
             />
           )}
         </div>
@@ -530,16 +1046,99 @@ export default function RecordPage() {
       {/* ============ MANUAL MODE ============ */}
       {inputMode === "manual" && pageState === "entry" && (
         <>
+          <section className="mx-4 mt-5 rounded-2xl p-4" style={{ backgroundColor: "#FFFFFF" }}>
+            <h2 className="text-base font-bold" style={{ color: "#2D5016" }}>
+              빠른 입력 기본값
+            </h2>
+            <p className="mt-1 text-sm" style={{ color: "#66705F" }}>
+              아래 값으로 작업이 바로 추가됩니다.
+            </p>
+
+            <div className="mt-4">
+              <p className="mb-2 text-sm font-bold" style={{ color: "#384832" }}>필지</p>
+              {fieldsLoading ? (
+                <p className="min-h-12 py-3 text-sm" style={{ color: "#66705F" }}>필지를 불러오는 중...</p>
+              ) : fieldsError ? (
+                <div className="rounded-xl border p-3" style={{ backgroundColor: "#FFF8EC", borderColor: "#D8A45B" }} role="alert">
+                  <p className="text-sm font-semibold" style={{ color: "#754315" }}>
+                    필지를 불러오지 못했습니다. 빈 필지로 처리하지 않았습니다.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void loadFields()}
+                    className="mt-2 min-h-12 rounded-xl px-5 text-sm font-bold"
+                    style={{ backgroundColor: "#FFFFFF", color: "#2D5016", border: "1px solid #AFC3A3" }}
+                  >
+                    다시 불러오기
+                  </button>
+                </div>
+              ) : fields.length === 0 ? (
+                <button
+                  type="button"
+                  onClick={() => router.push("/farmer/fields")}
+                  className="min-h-12 w-full rounded-xl px-4 text-sm font-bold"
+                  style={{ backgroundColor: "#EDF4E8", color: "#2D5016" }}
+                >
+                  필지를 먼저 등록하기 →
+                </button>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {fields.map((field) => (
+                    <button
+                      type="button"
+                      key={field.id}
+                      onClick={() => rememberQuickDefaults(field.name, defaultDurationHours)}
+                      className="min-h-12 rounded-xl px-4 text-sm font-bold"
+                      style={{
+                        backgroundColor: defaultFieldName === field.name ? "#2D5016" : "#F5F1EC",
+                        color: defaultFieldName === field.name ? "#FFFFFF" : "#2D5016",
+                      }}
+                      aria-pressed={defaultFieldName === field.name}
+                    >
+                      {field.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-4">
+              <p className="mb-2 text-sm font-bold" style={{ color: "#384832" }}>작업 시간</p>
+              <div className="grid grid-cols-4 gap-2">
+                {QUICK_DURATION_OPTIONS.map((hours) => (
+                  <button
+                    type="button"
+                    key={hours}
+                    onClick={() => rememberQuickDefaults(defaultFieldName, hours)}
+                    className="min-h-12 rounded-xl text-sm font-bold"
+                    style={{
+                      backgroundColor: defaultDurationHours === hours ? "#2D5016" : "#F5F1EC",
+                      color: defaultDurationHours === hours ? "#FFFFFF" : "#2D5016",
+                    }}
+                    aria-pressed={defaultDurationHours === hours}
+                  >
+                    {hours < 1 ? "30분" : `${hours}시간`}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </section>
+
           {/* --- Quick Task Buttons --- */}
           <div className="px-4 mt-6">
-            <p className="text-xs font-semibold mb-3" style={{ color: "#6B6B6B" }}>
-              오늘 한 작업을 선택하세요
+            <p className="mb-3 text-sm font-bold" style={{ color: "#384832" }}>
+              한 작업을 누르면 바로 추가됩니다
             </p>
             <div className="grid grid-cols-4 gap-3">
               {TASK_BUTTONS.map((task) => (
                 <button
+                  type="button"
                   key={task.stage}
-                  onClick={() => openTaskPanel(task)}
+                  onClick={() =>
+                    DETAIL_FIRST_STAGES.has(task.stage)
+                      ? openTaskPanel(task)
+                      : addQuickTask(task)
+                  }
                   className="flex flex-col items-center justify-center rounded-2xl py-4 transition-all active:scale-95"
                   // 56px minimum height for glove-friendly taps
                   style={{
@@ -555,6 +1154,23 @@ export default function RecordPage() {
                 </button>
               ))}
             </div>
+
+            {quickAddedTask && (
+              <div
+                className="mt-3 flex min-h-14 items-center justify-between gap-3 rounded-xl px-4"
+                style={{ backgroundColor: "#EDF4E8", color: "#2D5016" }}
+                role="status"
+              >
+                <p className="text-sm font-bold">{quickAddedTask.stage} 작업을 추가했습니다.</p>
+                <button
+                  type="button"
+                  onClick={() => removeTask(quickAddedTask.id)}
+                  className="min-h-12 shrink-0 rounded-lg px-3 text-sm font-bold underline"
+                >
+                  실행 취소
+                </button>
+              </div>
+            )}
           </div>
 
           {/* --- Slide-up Detail Panel --- */}
@@ -580,8 +1196,9 @@ export default function RecordPage() {
                     </h3>
                   </div>
                   <button
+                    type="button"
                     onClick={closeTaskPanel}
-                    className="w-10 h-10 rounded-full flex items-center justify-center"
+                    className="flex h-12 w-12 items-center justify-center rounded-full"
                     style={{ backgroundColor: "#F5F1EC", color: "#6B6B6B" }}
                   >
                     ✕
@@ -594,9 +1211,21 @@ export default function RecordPage() {
                     필지 선택
                   </label>
                   {fieldsLoading ? (
-                    <p className="text-xs" style={{ color: "#9B9B9B" }}>불러오는 중...</p>
+                    <p className="min-h-12 py-3 text-sm" style={{ color: "#66705F" }}>불러오는 중...</p>
+                  ) : fieldsError ? (
+                    <div className="rounded-xl p-3" style={{ backgroundColor: "#FFF8EC" }} role="alert">
+                      <p className="text-sm font-semibold" style={{ color: "#754315" }}>필지 확인에 실패했습니다.</p>
+                      <button
+                        type="button"
+                        onClick={() => void loadFields()}
+                        className="mt-2 min-h-12 rounded-lg px-4 text-sm font-bold"
+                        style={{ backgroundColor: "#FFFFFF", color: "#2D5016" }}
+                      >
+                        다시 불러오기
+                      </button>
+                    </div>
                   ) : fields.length === 0 ? (
-                    <p className="text-xs" style={{ color: "#9B9B9B" }}>
+                    <p className="text-sm" style={{ color: "#66705F" }}>
                       등록된 필지가 없습니다
                     </p>
                   ) : (
@@ -609,13 +1238,12 @@ export default function RecordPage() {
                               selectedFieldName === field.name ? null : field.name
                             )
                           }
-                          className="px-4 py-2.5 rounded-full text-sm font-medium transition-colors"
+                          className="min-h-12 rounded-xl px-4 py-2.5 text-sm font-bold transition-colors"
                           style={{
                             backgroundColor:
                               selectedFieldName === field.name ? "#2D5016" : "#F5F1EC",
                             color:
                               selectedFieldName === field.name ? "#FFFFFF" : "#2D5016",
-                            minHeight: "44px",
                           }}
                         >
                           {field.name}
@@ -635,7 +1263,7 @@ export default function RecordPage() {
                     value={detailText}
                     onChange={(e) => setDetailText(e.target.value)}
                     placeholder="예: 과수원 전체 3열 작업"
-                    className="w-full px-4 py-3 rounded-xl text-sm border-none outline-none"
+                    className="min-h-13 w-full rounded-xl border-none px-4 py-3 text-base outline-none"
                     style={{ backgroundColor: "#F5F1EC", color: "#1A1A1A" }}
                   />
                 </div>
@@ -666,89 +1294,25 @@ export default function RecordPage() {
                   </div>
                 </div>
 
-                {/* 방제 (pest control) specific fields — with pesticide autocomplete */}
+                {/* 방제 (pest control) fields — record only, no safety recommendation */}
                 {activeTask.stage === "방제" && (
                   <div className="mb-5 space-y-4">
                     <div>
                       <label className="text-xs font-semibold mb-2 block" style={{ color: "#6B6B6B" }}>
                         약제명
                       </label>
-                      <div className="relative">
-                        <input
-                          type="text"
-                          value={chemicalName}
-                          onChange={(e) => handleChemicalNameChange(e.target.value)}
-                          placeholder="예: 석회유황합제 (입력하면 자동 추천)"
-                          className="w-full px-4 py-3 rounded-xl text-sm border-none outline-none"
-                          style={{ backgroundColor: "#F5F1EC", color: "#1A1A1A" }}
-                        />
-                        {/* Autocomplete dropdown */}
-                        {pesticideMatches.length > 0 && (
-                          <div
-                            className="absolute left-0 right-0 top-full mt-1 rounded-xl shadow-lg z-10 max-h-48 overflow-y-auto"
-                            style={{ backgroundColor: "#FFFFFF", border: "1px solid #E5E2DB" }}
-                          >
-                            {pesticideMatches.map((p) => (
-                              <button
-                                key={p.id}
-                                onClick={() => selectPesticide(p)}
-                                className="w-full text-left px-4 py-3 text-sm hover:bg-gray-50 border-b last:border-b-0"
-                                style={{ borderColor: "#F5F1EC" }}
-                              >
-                                <span className="font-medium" style={{ color: "#1A1A1A" }}>
-                                  {p.name_kr}
-                                </span>
-                                <span className="ml-2 text-xs" style={{ color: "#9B9B9B" }}>
-                                  {p.type} · {p.dilution_ratio} · 안전기간 {p.safety_days}일
-                                </span>
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                      {/* Show all pesticides as chips when input is empty */}
-                      {!chemicalName && pesticides.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5 mt-2">
-                          {pesticides.slice(0, 6).map((p) => (
-                            <button
-                              key={p.id}
-                              onClick={() => selectPesticide(p)}
-                              className="px-3 py-2 rounded-full text-xs"
-                              style={{ backgroundColor: "#F5F1EC", color: "#6B6B6B", minHeight: "40px" }}
-                            >
-                              {p.name_kr}
-                            </button>
-                          ))}
-                        </div>
-                      )}
+                      <input
+                        type="text"
+                        value={chemicalName}
+                        onChange={(e) => setChemicalName(e.target.value)}
+                        placeholder="실제로 사용한 제품명을 입력하세요"
+                        className="min-h-13 w-full rounded-xl border-none px-4 py-3 text-base outline-none"
+                        style={{ backgroundColor: "#F5F1EC", color: "#1A1A1A" }}
+                      />
+                      <p className="text-xs mt-2" style={{ color: "#9B9B9B" }}>
+                        제품 라벨과 공식 농약안전정보를 직접 확인한 뒤 기록해주세요.
+                      </p>
                     </div>
-
-                    {/* Safety warning — shown after selecting a pesticide */}
-                    {safetyWarning && (
-                      <div
-                        className="rounded-xl p-3 text-sm"
-                        style={{
-                          backgroundColor: safetyWarning.is_safe ? "#EDF4E8" : "#FEF3E2",
-                          color: safetyWarning.is_safe ? "#2D5016" : "#D4421E",
-                        }}
-                      >
-                        {safetyWarning.is_safe ? (
-                          <p>✅ 안전기간 경과 — 수확 가능</p>
-                        ) : (
-                          <>
-                            <p className="font-bold">
-                              ⚠️ 안전기간 {safetyWarning.safety_days}일
-                            </p>
-                            <p className="mt-1">
-                              오늘 살포 시 수확 가능일: <strong>{safetyWarning.safe_harvest_date}</strong>
-                            </p>
-                            <p>
-                              남은 기간: <strong>{safetyWarning.days_remaining}일</strong>
-                            </p>
-                          </>
-                        )}
-                      </div>
-                    )}
 
                     <div>
                       <label className="text-xs font-semibold mb-2 block" style={{ color: "#6B6B6B" }}>
@@ -759,7 +1323,7 @@ export default function RecordPage() {
                         value={dilutionRatio}
                         onChange={(e) => setDilutionRatio(e.target.value)}
                         placeholder="예: 1000배"
-                        className="w-full px-4 py-3 rounded-xl text-sm border-none outline-none"
+                        className="min-h-13 w-full rounded-xl border-none px-4 py-3 text-base outline-none"
                         style={{ backgroundColor: "#F5F1EC", color: "#1A1A1A" }}
                       />
                     </div>
@@ -772,7 +1336,7 @@ export default function RecordPage() {
                         value={sprayAmount}
                         onChange={(e) => setSprayAmount(e.target.value)}
                         placeholder="예: 200리터"
-                        className="w-full px-4 py-3 rounded-xl text-sm border-none outline-none"
+                        className="min-h-13 w-full rounded-xl border-none px-4 py-3 text-base outline-none"
                         style={{ backgroundColor: "#F5F1EC", color: "#1A1A1A" }}
                       />
                     </div>
@@ -791,7 +1355,7 @@ export default function RecordPage() {
                         value={fertilizerName}
                         onChange={(e) => setFertilizerName(e.target.value)}
                         placeholder="예: 복합비료 21-17-17"
-                        className="w-full px-4 py-3 rounded-xl text-sm border-none outline-none"
+                        className="min-h-13 w-full rounded-xl border-none px-4 py-3 text-base outline-none"
                         style={{ backgroundColor: "#F5F1EC", color: "#1A1A1A" }}
                       />
                     </div>
@@ -804,7 +1368,7 @@ export default function RecordPage() {
                         value={fertilizerAmount}
                         onChange={(e) => setFertilizerAmount(e.target.value)}
                         placeholder="예: 20kg/주"
-                        className="w-full px-4 py-3 rounded-xl text-sm border-none outline-none"
+                        className="min-h-13 w-full rounded-xl border-none px-4 py-3 text-base outline-none"
                         style={{ backgroundColor: "#F5F1EC", color: "#1A1A1A" }}
                       />
                     </div>
@@ -813,11 +1377,12 @@ export default function RecordPage() {
 
                 {/* Add task button */}
                 <button
+                  type="button"
                   onClick={addTaskToList}
                   className="w-full py-4 rounded-2xl font-bold text-white text-base active:scale-[0.98] transition-transform"
                   style={{ backgroundColor: "#2D5016", minHeight: "56px" }}
                 >
-                  작업 추가
+                  {editingTaskId ? "작업 수정 완료" : "작업 추가"}
                 </button>
               </div>
             </div>
@@ -826,8 +1391,8 @@ export default function RecordPage() {
           {/* --- Running Task List --- */}
           {tasks.length > 0 && (
             <div className="px-4 mt-6">
-              <p className="text-xs font-semibold mb-3" style={{ color: "#6B6B6B" }}>
-                오늘의 작업 ({tasks.length}건)
+              <p className="mb-3 text-sm font-bold" style={{ color: "#384832" }}>
+                기록할 작업 ({tasks.length}건)
               </p>
               <div className="space-y-2">
                 {tasks.map((task) => (
@@ -836,48 +1401,57 @@ export default function RecordPage() {
                     className="flex items-center gap-3 rounded-2xl px-4 py-3"
                     style={{ backgroundColor: "#FFFFFF" }}
                   >
-                    <span className="text-xl shrink-0">{task.emoji}</span>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-semibold" style={{ color: "#1A1A1A" }}>
-                          {task.stage}
-                        </span>
-                        {task.fieldName && (
-                          <span
-                            className="text-xs px-2 py-0.5 rounded-full"
-                            style={{ backgroundColor: "#EDF4E8", color: "#2D5016" }}
-                          >
-                            {task.fieldName}
-                          </span>
-                        )}
-                      </div>
-                      {task.detail && (
-                        <p className="text-xs truncate" style={{ color: "#6B6B6B" }}>
-                          {task.detail}
-                        </p>
-                      )}
-                      <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-0.5">
-                        <span className="text-xs" style={{ color: "#9B9B9B" }}>
-                          {task.durationHours}시간
-                        </span>
-                        {task.chemicalName && (
-                          <span className="text-xs" style={{ color: "#D4421E" }}>
-                            💊 {task.chemicalName}
-                            {task.dilutionRatio ? ` (${task.dilutionRatio})` : ""}
-                          </span>
-                        )}
-                        {task.fertilizerName && (
-                          <span className="text-xs" style={{ color: "#2D5016" }}>
-                            🌱 {task.fertilizerName}
-                            {task.fertilizerAmount ? ` ${task.fertilizerAmount}` : ""}
-                          </span>
-                        )}
-                      </div>
-                    </div>
                     <button
+                      type="button"
+                      onClick={() => editTask(task)}
+                      className="flex min-h-14 min-w-0 flex-1 items-center gap-3 text-left"
+                      aria-label={`${task.stage} 작업 수정`}
+                    >
+                      <span className="shrink-0 text-xl">{task.emoji}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-2">
+                          <span className="text-base font-bold" style={{ color: "#1A1A1A" }}>
+                            {task.stage}
+                          </span>
+                          {task.fieldName && (
+                            <span
+                              className="rounded-full px-2 py-0.5 text-sm"
+                              style={{ backgroundColor: "#EDF4E8", color: "#2D5016" }}
+                            >
+                              {task.fieldName}
+                            </span>
+                          )}
+                        </span>
+                        {task.detail && (
+                          <span className="block truncate text-sm" style={{ color: "#6B6B6B" }}>
+                            {task.detail}
+                          </span>
+                        )}
+                        <span className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5">
+                          <span className="text-sm" style={{ color: "#66705F" }}>
+                            {task.durationHours}시간 · 눌러서 수정
+                          </span>
+                          {task.chemicalName && (
+                            <span className="text-sm" style={{ color: "#A33D1E" }}>
+                              💊 {task.chemicalName}
+                              {task.dilutionRatio ? ` (${task.dilutionRatio})` : ""}
+                            </span>
+                          )}
+                          {task.fertilizerName && (
+                            <span className="text-sm" style={{ color: "#2D5016" }}>
+                              🌱 {task.fertilizerName}
+                              {task.fertilizerAmount ? ` ${task.fertilizerAmount}` : ""}
+                            </span>
+                          )}
+                        </span>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => removeTask(task.id)}
-                      className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 active:scale-95"
+                      className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-lg active:scale-95"
                       style={{ backgroundColor: "#F5F1EC", color: "#D4421E" }}
+                      aria-label={`${task.stage} 작업 삭제`}
                     >
                       ✕
                     </button>
@@ -890,73 +1464,67 @@ export default function RecordPage() {
           {/* --- Notes --- */}
           {tasks.length > 0 && (
             <div className="px-4 mt-6">
-              <label className="text-xs font-semibold mb-2 block" style={{ color: "#6B6B6B" }}>
+              <label className="mb-2 block text-sm font-bold" style={{ color: "#384832" }}>
                 메모 (선택)
               </label>
               <textarea
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                placeholder="오늘 특이사항이 있으면 메모하세요"
+                placeholder="이 날의 특이사항이 있으면 메모하세요"
                 rows={2}
-                className="w-full px-4 py-3 rounded-xl text-sm border-none outline-none resize-none"
+                className="min-h-14 w-full resize-none rounded-xl border-none px-4 py-3 text-base outline-none"
                 style={{ backgroundColor: "#FFFFFF", color: "#1A1A1A" }}
               />
             </div>
           )}
 
-          {/* --- Photo Attachment --- */}
-          <div className="px-4 mt-6">
-            <label className="text-xs font-semibold mb-2 block" style={{ color: "#6B6B6B" }}>
-              사진 첨부 (선택)
-            </label>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              multiple
-              capture="environment"
-              onChange={handlePhotoSelect}
-              className="hidden"
-            />
-            <div className="flex flex-wrap gap-3">
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="w-20 h-20 rounded-xl flex flex-col items-center justify-center active:scale-95"
-                style={{ backgroundColor: "#FFFFFF", color: "#6B6B6B" }}
-              >
-                <span className="text-2xl mb-1">📷</span>
-                <span className="text-[10px]">추가</span>
-              </button>
-              {photos.map((photo, i) => (
-                <div key={i} className="relative w-20 h-20">
-                  <img
-                    src={URL.createObjectURL(photo)}
-                    alt={`사진 ${i + 1}`}
-                    className="w-full h-full rounded-xl object-cover"
+          {FARM_LOG_PHOTO_UPLOAD_BUILD_ENABLED && (
+            <div className="px-4 mt-6">
+              <label className="mb-2 block text-sm font-bold" style={{ color: "#384832" }}>
+                사진 첨부 (선택)
+              </label>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                capture="environment"
+                onChange={handlePhotoSelect}
+                className="hidden"
+              />
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="w-20 h-20 rounded-xl flex flex-col items-center justify-center active:scale-95"
+                  style={{ backgroundColor: "#FFFFFF", color: "#6B6B6B" }}
+                >
+                  <span className="text-2xl mb-1">📷</span>
+                  <span className="text-sm">추가</span>
+                </button>
+                {photos.map((photo, i) => (
+                  <PhotoPreview
+                    key={`${photo.name}-${photo.lastModified}-${i}`}
+                    photo={photo}
+                    index={i}
+                    onRemove={removePhoto}
                   />
-                  <button
-                    onClick={() => removePhoto(i)}
-                    className="absolute -top-2 -right-2 w-8 h-8 rounded-full flex items-center justify-center text-xs text-white"
-                    style={{ backgroundColor: "#D4421E" }}
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-          </div>
+          )}
         </>
       )}
 
       {/* ============ BOTTOM SAVE BAR (manual mode only) ============ */}
       {inputMode === "manual" && pageState === "entry" && tasks.length > 0 && (
         <div
-          className="fixed bottom-0 left-0 right-0 px-4 py-4 border-t"
+          className="fixed left-0 right-0 z-40 px-4 py-4 border-t"
           style={{
             backgroundColor: "#FFFFFF",
             borderColor: "#E5E2DB",
-            // Safe area bottom padding for notch devices
-            paddingBottom: "max(16px, env(safe-area-inset-bottom))",
+            bottom:
+              "calc(var(--farmer-nav-height, 72px) + env(safe-area-inset-bottom))",
           }}
         >
           <button
@@ -1000,5 +1568,22 @@ export default function RecordPage() {
         }
       `}</style>
     </div>
+  );
+}
+
+export default function RecordPage() {
+  return (
+    <Suspense
+      fallback={
+        <div
+          className="min-h-screen flex items-center justify-center text-sm"
+          style={{ backgroundColor: "#F5F1EC", color: "#2D5016" }}
+        >
+          기록을 불러오는 중...
+        </div>
+      }
+    >
+      <RecordPageContent />
+    </Suspense>
   );
 }

@@ -96,7 +96,7 @@ export default function InsightsPage() {
       }
     }
     loadData();
-  }, []);
+  }, [thisMonth, thisYear]);
 
   const repeatCustomers = customers.filter((c) => c.total_orders >= 2);
   const repeatRate = totalCustomers > 0
@@ -213,23 +213,29 @@ export default function InsightsPage() {
           리포트 다운로드
         </p>
         <div className="space-y-2">
-          <a
-            href={getMonthlyPdfUrl(thisYear, thisMonth)}
-            target="_blank"
+          <button
+            type="button"
+            onClick={async () => {
+              const url = await getMonthlyPdfUrl(thisYear, thisMonth);
+              window.open(url, "_blank");
+            }}
             className="block w-full py-3 rounded-xl font-bold text-center text-sm"
             style={{ backgroundColor: "#EDF4E8", color: "#2D5016" }}
           >
             &#128202; {thisMonth}월 월간 리포트 (PDF)
-          </a>
+          </button>
           {thisMonth > 1 && (
-            <a
-              href={getMonthlyPdfUrl(thisYear, thisMonth - 1)}
-              target="_blank"
+            <button
+              type="button"
+              onClick={async () => {
+                const url = await getMonthlyPdfUrl(thisYear, thisMonth - 1);
+                window.open(url, "_blank");
+              }}
               className="block w-full py-3 rounded-xl font-bold text-center text-sm"
               style={{ backgroundColor: "#F5F1EC", color: "#6B6B6B" }}
             >
               &#128202; {thisMonth - 1}월 월간 리포트 (PDF)
-            </a>
+            </button>
           )}
         </div>
       </div>

@@ -4,34 +4,44 @@ import { useEffect, useState } from "react";
 import { CalendarMonth } from "@/types";
 
 const MONTH_NAMES = ["", "1월", "2월", "3월", "4월", "5월", "6월", "7월", "8월", "9월", "10월", "11월", "12월"];
+const INITIAL_MONTH = new Date().getMonth() + 1;
+const EMPTY_FORM = { activities: "", available_products: "", highlight: "" };
+
+function formFromEntry(entry?: CalendarMonth) {
+  if (!entry) return EMPTY_FORM;
+
+  return {
+    activities: entry.activities.join("\n"),
+    available_products: entry.available_products.join(", "),
+    highlight: entry.highlight ?? "",
+  };
+}
 
 export default function CalendarAdminPage() {
   const [calendar, setCalendar] = useState<CalendarMonth[]>([]);
-  const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
-  const [form, setForm] = useState({ activities: "", available_products: "", highlight: "" });
+  const [selectedMonth, setSelectedMonth] = useState(INITIAL_MONTH);
+  const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
 
-  const load = () => {
-    fetch("/api/v1/calendar")
+  const load = (month: number) => {
+    return fetch("/api/v1/calendar")
       .then((r) => r.json())
-      .then(setCalendar);
+      .then((entries: CalendarMonth[]) => {
+        setCalendar(entries);
+        setForm(formFromEntry(entries.find((entry) => entry.month === month)));
+      });
   };
 
-  useEffect(() => { load(); }, []);
-
   useEffect(() => {
-    const entry = calendar.find((c) => c.month === selectedMonth);
-    if (entry) {
-      setForm({
-        activities: entry.activities.join("\n"),
-        available_products: entry.available_products.join(", "),
-        highlight: entry.highlight ?? "",
-      });
-    } else {
-      setForm({ activities: "", available_products: "", highlight: "" });
-    }
-  }, [selectedMonth, calendar]);
+    void load(INITIAL_MONTH);
+  }, []);
+
+  const handleMonthSelect = (month: number) => {
+    setSelectedMonth(month);
+    setForm(formFromEntry(calendar.find((entry) => entry.month === month)));
+    setMessage("");
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -48,7 +58,7 @@ export default function CalendarAdminPage() {
     setSaving(false);
     if (res.ok) {
       setMessage("저장되었습니다!");
-      load();
+      await load(selectedMonth);
     } else {
       setMessage("저장 실패");
     }
@@ -66,7 +76,7 @@ export default function CalendarAdminPage() {
         {Array.from({ length: 12 }, (_, i) => i + 1).map((month) => (
           <button
             key={month}
-            onClick={() => { setSelectedMonth(month); setMessage(""); }}
+            onClick={() => handleMonthSelect(month)}
             className="w-12 h-12 rounded-xl text-sm font-medium transition-colors"
             style={{
               backgroundColor: selectedMonth === month ? "#2D5016" : "#FFFFFF",

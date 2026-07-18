@@ -1,29 +1,94 @@
 @import "tailwindcss";
 
 :root {
-  --color-primary: #2D5016;
-  --color-primary-light: #4A7C2E;
-  --color-accent: #D4421E;
-  --color-accent-warm: #E8913A;
-  --color-bg: #FDFBF7;
+  --color-primary: #24482B;
+  --color-primary-strong: #17351F;
+  --color-primary-light: #4F713E;
+  --color-accent: #B63A20;
+  --color-accent-warm: #C86E2D;
+  --color-bg: #F7F3E9;
   --color-surface: #FFFFFF;
-  --color-text: #1A1A1A;
-  --color-text-secondary: #6B6B6B;
-  --color-text-muted: #9B9B9B;
-  --color-border: #E5E2DB;
+  --color-surface-soft: #EEE8DA;
+  --color-text: #182019;
+  --color-text-secondary: #4D594D;
+  --color-text-muted: #5F6C5E;
+  --color-border: #D8D2C5;
+  --color-focus: #D77B2F;
+  --shadow-soft: 0 12px 40px rgba(32, 55, 31, 0.08);
+  --radius-card: 24px;
+  --farmer-nav-height: 72px;
 }
 
 body {
+  min-width: 320px;
+  min-height: 100vh;
   background-color: var(--color-bg);
   color: var(--color-text);
   font-family: -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo',
     'Pretendard Variable', Pretendard, 'Noto Sans KR', system-ui, sans-serif;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 }
 
 html {
   scroll-behavior: smooth;
   /* Prevent horizontal overflow on mobile */
   overflow-x: hidden;
+  color-scheme: light;
+  background: var(--color-bg);
+}
+
+::selection {
+  color: #FFFFFF;
+  background: var(--color-primary);
+}
+
+:where(a, button, input, select, textarea, summary):focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 3px;
+}
+
+:where(button, input, select, textarea) {
+  font: inherit;
+}
+
+:where(button, a) {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.farmer-shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.farmer-main {
+  padding-bottom: calc(var(--farmer-nav-height) + env(safe-area-inset-bottom, 0px));
+}
+
+.farmer-bottom-nav {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+@media (pointer: coarse) {
+  .farmer-shell button,
+  .farmer-shell a {
+    touch-action: manipulation;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* scrollbar-hide utility — Tailwind v4 doesn't include this by default */

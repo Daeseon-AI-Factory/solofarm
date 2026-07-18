@@ -1,143 +1,179 @@
 "use client";
 
-import { FarmProfile, ProductItem } from "@/types";
+import type { PublicSalesMode } from "@/lib/publicFarmProfile";
+import type { FarmProfile, ProductItem } from "@/types";
 
 interface OrderSectionProps {
   farm: FarmProfile;
   products: ProductItem[];
+  directCheckoutEnabled: boolean;
+  salesMode: PublicSalesMode;
 }
 
-export default function OrderSection({ farm, products }: OrderSectionProps) {
-  const availableProducts = products.filter((p) => p.is_available);
+export default function OrderSection({
+  farm,
+  products,
+  directCheckoutEnabled,
+  salesMode,
+}: OrderSectionProps) {
+  const availableProducts = products.filter((product) => product.is_available);
+  const hasInquiryChannel = Boolean(
+    farm.kakao_chat_url || farm.phone || farm.naver_store_url
+  );
+  const showAvailableProducts = salesMode !== "preparing" && availableProducts.length > 0;
 
-  const handleKakao = () => {
-    if (farm.kakao_chat_url) {
-      fetch("/api/v1/inquiry", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ channel: "kakao" }),
-      }).catch(() => {});
-      window.open(farm.kakao_chat_url, "_blank");
-    }
+  const trackInquiry = (channel: "kakao" | "phone" | "naver") => {
+    fetch("/api/v1/inquiry", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ channel }),
+    }).catch(() => {});
   };
 
-  const handlePhone = () => {
-    if (farm.phone) {
-      fetch("/api/v1/inquiry", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ channel: "phone" }),
-      }).catch(() => {});
-      window.location.href = `tel:${farm.phone}`;
-    }
-  };
-
-  const handleNaver = () => {
-    if (farm.naver_store_url) {
-      fetch("/api/v1/inquiry", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ channel: "naver" }),
-      }).catch(() => {});
-      window.open(farm.naver_store_url, "_blank");
-    }
-  };
+  const title =
+    salesMode === "direct"
+      ? "판매 중인 사과를 만나보세요"
+      : hasInquiryChannel
+        ? "판매 일정과 재고를 문의하세요"
+        : "정확한 판매 정보를 준비하고 있습니다";
 
   return (
-    <section
-      id="order"
-      className="py-16 md:py-24 px-4"
-      style={{ backgroundColor: "#2D5016" }}
-    >
-      <div className="max-w-2xl mx-auto text-center text-white">
-        <h2 className="text-2xl md:text-3xl font-bold mb-2">주문 안내</h2>
-        <div
-          className="w-12 h-1 mx-auto rounded mb-8"
-          style={{ backgroundColor: "#E8913A" }}
-        />
+    <section id="order" className="scroll-mt-4 bg-[#17370F] px-4 py-16 md:py-24">
+      <div className="mx-auto max-w-3xl text-center text-white">
+        <p className="text-xs font-bold tracking-[0.18em] text-[#F2B36D]">
+          ORDER & CONTACT
+        </p>
+        <h2 className="mt-3 break-keep text-3xl font-bold tracking-[-0.04em] md:text-4xl">
+          {title}
+        </h2>
+        <p className="mx-auto mt-4 max-w-xl break-keep text-sm leading-6 text-white/70 md:text-base">
+          {hasInquiryChannel
+            ? directCheckoutEnabled && salesMode === "direct"
+              ? "원하는 상품과 용량을 선택하면 온라인 주문으로 이어집니다."
+              : "농장 일을 마친 뒤 순서대로 답변드립니다. 재고와 출고일을 먼저 확인해 주세요."
+            : "실제 판매 상품과 주문 연락처가 확인되기 전에는 주문을 접수하지 않습니다."}
+        </p>
 
-        {/* Available products */}
-        {availableProducts.length > 0 && (
-          <div
-            className="rounded-2xl p-6 mb-8 text-left"
-            style={{ backgroundColor: "rgba(255,255,255,0.1)" }}
-          >
-            <p
-              className="text-xs font-semibold uppercase tracking-wider mb-4"
-              style={{ color: "#E8913A" }}
-            >
-              현재 판매 중
+        {showAvailableProducts && (
+          <div className="mt-8 rounded-2xl border border-white/15 bg-white/10 p-5 text-left md:p-6">
+            <p className="mb-4 text-xs font-bold tracking-wide text-[#F2B36D]">
+              {directCheckoutEnabled ? "현재 주문 가능" : "현재 재고 문의 가능"}
             </p>
-            <div className="space-y-3">
-              {availableProducts.map((p) => {
-                const priceOptions = p.price_options ?? [];
-                return (
-                  <div key={p.id} className="flex justify-between items-start">
-                    <span className="font-medium">{p.name}</span>
-                    <div className="text-right text-sm">
-                      {priceOptions.map((opt, i) => (
-                        <p key={i} className="text-white/80">
-                          {opt.weight} — {opt.price.toLocaleString()}원
+            <div className="space-y-4">
+              {availableProducts.map((product) => (
+                <div key={product.id} className="flex flex-wrap items-start justify-between gap-2 border-b border-white/10 pb-4 last:border-0 last:pb-0">
+                  <span className="font-bold">{product.name}</span>
+                  {(product.price_options ?? []).length > 0 && (
+                    <div className="text-right text-sm text-white/75">
+                      {(product.price_options ?? []).map((option) => (
+                        <p key={`${option.weight}-${option.price}`}>
+                          {option.weight} · {option.price.toLocaleString()}원
                         </p>
                       ))}
                     </div>
-                  </div>
-                );
-              })}
+                  )}
+                </div>
+              ))}
             </div>
           </div>
         )}
 
-        {availableProducts.length === 0 && (
-          <p className="text-white/70 mb-8">현재 판매 중인 상품이 없습니다. 문의 주시면 안내해드립니다.</p>
+        {salesMode === "direct" ? (
+          <div className="mt-8 space-y-3">
+            <a
+              href="#products"
+              className="inline-flex min-h-14 w-full items-center justify-center rounded-2xl px-6 py-4 text-base font-bold text-white transition-transform active:scale-[0.98]"
+              style={{ backgroundColor: "#B63A20" }}
+            >
+              상품 선택하고 주문하기
+              <span aria-hidden="true" className="ml-2">↑</span>
+            </a>
+            {hasInquiryChannel && (
+              <p className="text-sm leading-6 text-white/65">
+                재고나 출고일이 궁금하면 아래 연락 채널로 먼저 확인할 수 있습니다.
+              </p>
+            )}
+          </div>
+        ) : hasInquiryChannel ? (
+          <div className="mt-8 grid gap-3 sm:grid-cols-2">
+            {farm.kakao_chat_url && (
+              <a
+                href={farm.kakao_chat_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => trackInquiry("kakao")}
+                className="inline-flex min-h-14 items-center justify-center rounded-2xl px-6 py-4 text-base font-bold text-black transition-transform active:scale-[0.98]"
+                style={{ backgroundColor: "#FEE500" }}
+              >
+                카카오톡 문의
+              </a>
+            )}
+            {farm.phone && (
+              <a
+                href={`tel:${farm.phone}`}
+                onClick={() => trackInquiry("phone")}
+                className="inline-flex min-h-14 items-center justify-center rounded-2xl border-2 border-white px-6 py-4 text-base font-bold text-white transition-transform active:scale-[0.98]"
+              >
+                전화 문의
+              </a>
+            )}
+          </div>
+        ) : (
+          <div className="mx-auto mt-8 max-w-xl rounded-2xl border border-[#F2B36D]/30 bg-[#F2B36D]/10 p-5 text-left">
+            <p className="font-bold text-[#F7CF98]">판매 준비 중</p>
+            <p className="mt-2 break-keep text-sm leading-6 text-white/70">
+              연락처와 출고 일정을 확인하는 중입니다. 확인되지 않은 전화번호나 주문 링크는 표시하지 않습니다.
+            </p>
+          </div>
         )}
 
-        {/* CTA buttons */}
-        <div className="flex flex-col sm:flex-row gap-4 justify-center mb-8">
-          {farm.kakao_chat_url && (
-            <button
-              onClick={handleKakao}
-              className="flex items-center justify-center gap-2 px-6 py-4 rounded-xl font-bold text-base transition-transform hover:scale-105 active:scale-95"
-              style={{ backgroundColor: "#FEE500", color: "#000000" }}
-            >
-              <span>💬</span>
-              카카오톡 문의
-            </button>
-          )}
-          {farm.phone && (
-            <button
-              onClick={handlePhone}
-              className="flex items-center justify-center gap-2 px-6 py-4 rounded-xl font-bold text-base transition-transform hover:scale-105 active:scale-95 border-2 border-white text-white"
-            >
-              <span>📞</span>
-              전화 주문
-            </button>
-          )}
-        </div>
-
-        {farm.naver_store_url && (
-          <button
-            onClick={handleNaver}
-            className="text-sm underline text-white/70 hover:text-white mb-8 block mx-auto"
-          >
-            네이버 스마트스토어 바로가기 →
-          </button>
-        )}
-
-        {/* Address */}
-        {farm.address_short && (
-          <div className="pt-6 border-t border-white/20">
-            <p className="text-white/60 text-sm">농장 위치</p>
-            <p className="text-white font-medium mt-1">{farm.address_short}</p>
-            {farm.address && (
-              <p className="text-white/60 text-xs mt-1">{farm.address}</p>
+        {salesMode === "direct" && hasInquiryChannel && (
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            {farm.kakao_chat_url && (
+              <a
+                href={farm.kakao_chat_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => trackInquiry("kakao")}
+                className="inline-flex min-h-12 items-center justify-center rounded-xl px-5 py-3 text-sm font-bold text-black"
+                style={{ backgroundColor: "#FEE500" }}
+              >
+                카카오톡으로 확인
+              </a>
+            )}
+            {farm.phone && (
+              <a
+                href={`tel:${farm.phone}`}
+                onClick={() => trackInquiry("phone")}
+                className="inline-flex min-h-12 items-center justify-center rounded-xl border border-white/60 px-5 py-3 text-sm font-bold text-white"
+              >
+                전화로 확인
+              </a>
             )}
           </div>
         )}
 
-        <p className="text-white/50 text-xs mt-6">
-          카카오톡 및 전화 문의는 오전 9시 ~ 오후 6시에 답변드립니다
-        </p>
+        {farm.naver_store_url && (
+          <a
+            href={farm.naver_store_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={() => trackInquiry("naver")}
+            className="mx-auto mt-5 inline-flex min-h-12 items-center px-4 text-sm font-bold text-white/80 underline underline-offset-4 hover:text-white"
+          >
+            네이버 스마트스토어에서 보기 →
+          </a>
+        )}
+
+        {farm.address_short && (
+          <div className="mt-10 border-t border-white/15 pt-7">
+            <p className="text-xs font-bold tracking-wide text-white/50">농장 위치</p>
+            <p className="mt-2 font-bold text-white">{farm.address_short}</p>
+            {farm.address && (
+              <p className="mt-1 text-xs leading-5 text-white/55">{farm.address}</p>
+            )}
+          </div>
+        )}
       </div>
     </section>
   );

@@ -7,14 +7,22 @@ interface CalendarSectionProps {
   calendar: CalendarMonth[];
 }
 
-const MONTH_LABELS = [
-  "1월", "2월", "3월", "4월", "5월", "6월",
-  "7월", "8월", "9월", "10월", "11월", "12월",
-];
+function currentMonthInKorea(): number {
+  return Number(
+    new Intl.DateTimeFormat("en-US", {
+      month: "numeric",
+      timeZone: "Asia/Seoul",
+    }).format(new Date())
+  );
+}
 
 export default function CalendarSection({ calendar }: CalendarSectionProps) {
-  const currentMonth = new Date().getMonth() + 1;
-  const [selectedMonth, setSelectedMonth] = useState(currentMonth);
+  const currentMonth = currentMonthInKorea();
+  const [selectedMonth, setSelectedMonth] = useState(() =>
+    calendar.some((entry) => entry.month === currentMonth)
+      ? currentMonth
+      : (calendar[0]?.month ?? currentMonth)
+  );
 
   const calendarMap = Object.fromEntries(calendar.map((c) => [c.month, c]));
   const selectedEntry = calendarMap[selectedMonth];
@@ -25,29 +33,25 @@ export default function CalendarSection({ calendar }: CalendarSectionProps) {
   };
 
   return (
-    <section className="py-16 md:py-24 px-4" style={{ backgroundColor: "#FDFBF7" }}>
-      <div className="max-w-5xl mx-auto">
-        <div className="text-center mb-12">
-          <h2
-            className="text-2xl md:text-3xl font-bold mb-2"
-            style={{ color: "#2D5016" }}
-          >
-            제철 달력
+    <section id="farm-now" className="bg-[#FDFBF7] px-4 py-16 md:py-24">
+      <div className="mx-auto max-w-5xl">
+        <div className="mb-9 md:mb-12">
+          <p className="mb-2 text-xs font-bold tracking-[0.16em] text-[#B9381B]">
+            FARM NOW
+          </p>
+          <h2 className="break-keep text-3xl font-bold tracking-[-0.04em] text-[#244C19] md:text-4xl">
+            지금 농장에서는
           </h2>
-          <div
-            className="w-12 h-1 mx-auto rounded mb-4"
-            style={{ backgroundColor: "#D4421E" }}
-          />
-          <p className="text-sm" style={{ color: "#6B6B6B" }}>
-            월별 농장 활동과 수확 시기를 확인하세요
+          <p className="mt-3 break-keep text-sm leading-6 text-[#5F655B] md:text-base">
+            확인된 월별 농장 소식과 수확 시기를 전합니다.
           </p>
         </div>
 
-        {/* Month selector — w-full + overflow-hidden on wrapper prevents page-level horizontal scroll */}
-        <div className="w-full overflow-hidden mb-8">
-        <div className="flex overflow-x-auto gap-2 pb-2 scrollbar-hide">
-          {MONTH_LABELS.map((label, i) => {
-            const month = i + 1;
+        {calendar.length > 1 && (
+          <div className="mb-7 w-full overflow-hidden">
+            <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+          {calendar.map((entry) => {
+            const month = entry.month;
             const isCurrent = month === currentMonth;
             const isSelected = month === selectedMonth;
             const hasHarvest = isHarvestMonth(month);
@@ -55,8 +59,11 @@ export default function CalendarSection({ calendar }: CalendarSectionProps) {
             return (
               <button
                 key={month}
+                type="button"
                 onClick={() => setSelectedMonth(month)}
-                className="flex-shrink-0 w-14 h-14 rounded-xl text-sm font-medium transition-all relative"
+                aria-pressed={isSelected}
+                aria-label={`${month}월${hasHarvest ? ", 수확 정보 있음" : ""}`}
+                className="relative h-14 w-14 flex-shrink-0 rounded-xl text-sm font-medium transition-all"
                 style={{
                   backgroundColor: isSelected
                     ? "#2D5016"
@@ -68,21 +75,22 @@ export default function CalendarSection({ calendar }: CalendarSectionProps) {
                   border: isCurrent && !isSelected ? "2px solid #2D5016" : "none",
                 }}
               >
-                {label}
+                {month}월
                 {hasHarvest && (
-                  <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-red-500" />
+                  <span aria-hidden="true" className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-[#B9381B]" />
                 )}
               </button>
             );
           })}
-        </div>
-        </div>
+            </div>
+          </div>
+        )}
 
         {/* Selected month detail */}
         {selectedEntry ? (
           <div
-            className="rounded-2xl p-6 md:p-8"
-            style={{ backgroundColor: "#F5F1EC" }}
+            className="rounded-[1.5rem] border p-6 md:p-8"
+            style={{ backgroundColor: "#F3F0E9", borderColor: "#DED9CE" }}
           >
             <div className="flex items-start gap-4">
               <div
@@ -105,7 +113,7 @@ export default function CalendarSection({ calendar }: CalendarSectionProps) {
                   <div className="mb-4">
                     <p
                       className="text-xs font-semibold uppercase tracking-wider mb-2"
-                      style={{ color: "#D4421E" }}
+                    style={{ color: "#B9381B" }}
                     >
                       수확 중인 품종
                     </p>
@@ -114,7 +122,7 @@ export default function CalendarSection({ calendar }: CalendarSectionProps) {
                         <span
                           key={i}
                           className="text-sm px-3 py-1 rounded-full text-white font-medium"
-                          style={{ backgroundColor: "#D4421E" }}
+                          style={{ backgroundColor: "#B9381B" }}
                         >
                           🍎 {p}
                         </span>
@@ -154,7 +162,7 @@ export default function CalendarSection({ calendar }: CalendarSectionProps) {
         ) : (
           <div
             className="rounded-2xl p-8 text-center"
-            style={{ backgroundColor: "#F5F1EC", color: "#9B9B9B" }}
+            style={{ backgroundColor: "#F3F0E9", color: "#66705F" }}
           >
             이달의 정보를 준비 중입니다
           </div>

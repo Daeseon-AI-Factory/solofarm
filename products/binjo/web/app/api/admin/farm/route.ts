@@ -4,6 +4,7 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { requireAdmin, unauthorizedResponse } from "@/lib/auth";
+import { ImageUrlSchema } from "@/lib/imageUrl";
 
 const UpdateFarmSchema = z.object({
   name: z.string().min(1).max(100).optional(),
@@ -16,8 +17,8 @@ const UpdateFarmSchema = z.object({
   youtube_url: z.string().url().max(500).optional().nullable(),
   address: z.string().optional().nullable(),
   address_short: z.string().max(100).optional().nullable(),
-  hero_image_url: z.string().url().max(500).optional().nullable(),
-  farmer_image_url: z.string().url().max(500).optional().nullable(),
+  hero_image_url: ImageUrlSchema.optional().nullable(),
+  farmer_image_url: ImageUrlSchema.optional().nullable(),
   stats: z
     .object({
       area: z.string().optional(),

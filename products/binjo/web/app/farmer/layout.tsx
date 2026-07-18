@@ -3,33 +3,42 @@
 import { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { isLoggedIn, getMyProfile, logout } from "@/lib/farmerApi";
+import FarmerIcon from "@/components/farmer/FarmerIcon";
 
-const NAV_ITEMS = [
-  { href: "/farmer/dashboard", label: "홈", icon: "🏠" },
-  { href: "/farmer/record", label: "기록", icon: "✏️" },
-  { href: "/farmer/calendar", label: "달력", icon: "📅" },
-  { href: "/farmer/logs", label: "일지", icon: "📋" },
-  { href: "/farmer/finance", label: "가계부", icon: "💰" },
-  { href: "/farmer/fields", label: "필지", icon: "🌳" },
-  { href: "/farmer/receipt", label: "영수증", icon: "📷" },
-  { href: "/farmer/insights", label: "인사이트", icon: "📊" },
-];
+const PRIMARY_NAV_ITEMS = [
+  { href: "/farmer/dashboard", label: "오늘", icon: "today" },
+  { href: "/farmer/record", label: "작업 기록", icon: "record" },
+  { href: "/farmer/logs", label: "일지 보기", icon: "logs" },
+  { href: "/farmer/finance", label: "가계부", icon: "finance" },
+] as const;
+
+const MANAGEMENT_ITEMS = [
+  { href: "/farmer/calendar", label: "달력", icon: "calendar" },
+  { href: "/farmer/fields", label: "필지", icon: "fields" },
+] as const;
+
+function isPrimaryItemActive(pathname: string, href: string): boolean {
+  if (href === "/farmer/finance") {
+    return ["/farmer/finance", "/farmer/transactions", "/farmer/receipt"].some(
+      (path) => pathname.startsWith(path)
+    );
+  }
+  return pathname === href;
+}
 
 export default function FarmerLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const [nickname, setNickname] = useState<string>("");
   const [checking, setChecking] = useState(true);
-  const [moreOpen, setMoreOpen] = useState(false);
+  const [managementOpen, setManagementOpen] = useState(false);
 
   useEffect(() => {
+    // The login route renders immediately without the authenticated shell.
+    if (pathname === "/farmer/login") return;
+
     // Check auth status
     if (!isLoggedIn()) {
-      // Allow the login page through
-      if (pathname === "/farmer/login") {
-        setChecking(false);
-        return;
-      }
       router.replace("/farmer/login");
       return;
     }
@@ -47,109 +56,145 @@ export default function FarmerLayout({ children }: { children: React.ReactNode }
       });
   }, [pathname, router]);
 
+  // Login page gets no auth-loading screen or navigation.
+  if (pathname === "/farmer/login") {
+    return <>{children}</>;
+  }
+
   if (checking) {
     return (
       <div
         className="min-h-screen flex items-center justify-center"
         style={{ backgroundColor: "#FDFBF7" }}
       >
-        <p style={{ color: "#9B9B9B" }}>로딩 중...</p>
+        <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>로딩 중...</p>
       </div>
     );
   }
 
-  // Login page gets no nav
-  if (pathname === "/farmer/login") {
-    return <>{children}</>;
-  }
-
   return (
-    <div className="min-h-screen" style={{ backgroundColor: "#FDFBF7" }}>
+    <div className="farmer-shell" style={{ backgroundColor: "#FDFBF7" }}>
       {/* Top bar */}
       <header
-        className="sticky top-0 z-50 px-4 py-3 flex items-center justify-between border-b"
-        style={{ backgroundColor: "#FFFFFF", borderColor: "#E5E2DB" }}
+        className="sticky top-0 z-50 flex items-center justify-between border-b px-4 pb-3"
+        style={{
+          backgroundColor: "#FFFFFF",
+          borderColor: "#E5E2DB",
+          paddingTop: "max(12px, env(safe-area-inset-top, 0px))",
+        }}
       >
         <div>
           <h1 className="text-lg font-bold" style={{ color: "#2D5016" }}>
             빈조농장
           </h1>
-          <p className="text-xs" style={{ color: "#6B6B6B" }}>
+          <p className="text-sm" style={{ color: "#6B6B6B" }}>
             안녕하세요, {nickname}님
           </p>
         </div>
         <button
-          onClick={() => { logout(); router.replace("/farmer/login"); }}
-          className="text-xs px-4 py-2.5 rounded-lg"
-          style={{ backgroundColor: "#F5F1EC", color: "#6B6B6B", minHeight: "44px" }}
+          type="button"
+          onClick={() => setManagementOpen(true)}
+          className="min-h-12 rounded-xl px-4 text-sm font-bold"
+          style={{ backgroundColor: "#EDF4E8", color: "#2D5016" }}
+          aria-haspopup="dialog"
+          aria-expanded={managementOpen}
         >
-          로그아웃
+          관리
         </button>
       </header>
 
       {/* Content */}
-      <main className="pb-20">{children}</main>
+      <main className="farmer-main">{children}</main>
 
-      {/* Bottom nav — mobile-first, first 4 tabs + "more" */}
-      <nav
-        className="fixed bottom-0 left-0 right-0 z-50 border-t"
-        style={{ backgroundColor: "#FFFFFF", borderColor: "#E5E2DB" }}
-      >
-        {/* "More" popup */}
-        {moreOpen && (
-          <>
-            <div className="fixed inset-0 z-40" onClick={() => setMoreOpen(false)} />
-            <div
-              className="absolute bottom-full left-0 right-0 z-50 rounded-t-2xl shadow-lg p-4 grid grid-cols-3 gap-3"
-              style={{ backgroundColor: "#FFFFFF", borderTop: "1px solid #E5E2DB" }}
-            >
-              {NAV_ITEMS.slice(4).map((item) => {
-                const active = pathname === item.href;
-                return (
-                  <button
-                    key={item.href}
-                    onClick={() => { router.push(item.href); setMoreOpen(false); }}
-                    className="flex flex-col items-center gap-1 py-4 rounded-xl text-xs font-medium"
-                    style={{
-                      backgroundColor: active ? "#EDF4E8" : "transparent",
-                      color: active ? "#2D5016" : "#6B6B6B",
-                    }}
-                  >
-                    <span className="text-xl">{item.icon}</span>
-                    <span>{item.label}</span>
-                  </button>
-                );
-              })}
+      {managementOpen && (
+        <div
+          className="fixed inset-0 z-[70] flex items-end justify-center bg-black/40"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="farmer-management-title"
+          onClick={() => setManagementOpen(false)}
+        >
+          <section
+            className="w-full max-w-lg rounded-t-3xl p-5 shadow-2xl"
+            style={{ backgroundColor: "#FFFFFF" }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-5 flex items-center justify-between">
+              <h2 id="farmer-management-title" className="text-lg font-bold" style={{ color: "#2D5016" }}>
+                농장 관리
+              </h2>
+              <button
+                type="button"
+                onClick={() => setManagementOpen(false)}
+                className="flex h-12 w-12 items-center justify-center rounded-full text-xl"
+                style={{ backgroundColor: "#F5F1EC", color: "#66705F" }}
+                aria-label="관리 메뉴 닫기"
+              >
+                ×
+              </button>
             </div>
-          </>
-        )}
-        <div className="flex">
-          {NAV_ITEMS.slice(0, 4).map((item) => {
-            const active = pathname === item.href;
+
+            <div className="grid grid-cols-2 gap-3">
+              {MANAGEMENT_ITEMS.map((item) => (
+                <button
+                  type="button"
+                  key={item.href}
+                  onClick={() => {
+                    router.push(item.href);
+                    setManagementOpen(false);
+                  }}
+                  className="flex min-h-20 flex-col items-center justify-center gap-1 rounded-2xl text-base font-bold"
+                  style={{ backgroundColor: "#F5F1EC", color: "#2D5016" }}
+                >
+                  <FarmerIcon name={item.icon} className="h-7 w-7" />
+                  {item.label}
+                </button>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                if (!window.confirm("로그아웃하시겠습니까?")) return;
+                logout();
+                setManagementOpen(false);
+                router.replace("/farmer/login");
+              }}
+              className="mt-4 min-h-14 w-full rounded-2xl text-base font-bold"
+              style={{ backgroundColor: "#FFF2EC", color: "#9F3F24" }}
+            >
+              로그아웃
+            </button>
+          </section>
+        </div>
+      )}
+
+      {/* Bottom nav — four stable destinations for one-handed field use. */}
+      <nav
+        className="farmer-bottom-nav fixed inset-x-0 bottom-0 z-40 border-t"
+        style={{ backgroundColor: "#FFFFFF", borderColor: "#E5E2DB" }}
+        aria-label="농장 주요 메뉴"
+      >
+        <div
+          className="grid grid-cols-4"
+          style={{ minHeight: "var(--farmer-nav-height)" }}
+        >
+          {PRIMARY_NAV_ITEMS.map((item) => {
+            const active = isPrimaryItemActive(pathname, item.href);
             return (
               <button
+                type="button"
                 key={item.href}
-                onClick={() => { router.push(item.href); setMoreOpen(false); }}
-                className="flex-1 flex flex-col items-center py-3 transition-colors"
-                style={{ color: active ? "#2D5016" : "#9B9B9B" }}
+                onClick={() => router.push(item.href)}
+                className="flex min-h-14 flex-col items-center justify-center gap-1 px-1 py-2 text-xs font-semibold transition-colors"
+                style={{ color: active ? "#2D5016" : "var(--color-text-muted)" }}
+                aria-current={active ? "page" : undefined}
               >
-                <span className="text-xl">{item.icon}</span>
-                <span className="text-[10px] mt-0.5 font-medium">{item.label}</span>
+                <FarmerIcon name={item.icon} className="h-6 w-6" />
+                <span>{item.label}</span>
               </button>
             );
           })}
-          <button
-            onClick={() => setMoreOpen(!moreOpen)}
-            className="flex-1 flex flex-col items-center py-3 transition-colors"
-            style={{
-              color: moreOpen || NAV_ITEMS.slice(4).some((i) => pathname === i.href)
-                ? "#2D5016"
-                : "#9B9B9B",
-            }}
-          >
-            <span className="text-xl">&#8943;</span>
-            <span className="text-[10px] mt-0.5 font-medium">더보기</span>
-          </button>
         </div>
       </nav>
     </div>

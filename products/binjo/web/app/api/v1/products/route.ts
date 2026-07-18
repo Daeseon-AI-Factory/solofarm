@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { requireAdmin } from "@/lib/auth";
+import { sanitizePublicProductItems } from "@/lib/publicFarmProfile";
+import type { ProductItem } from "@/types";
 
 export async function GET(req: NextRequest) {
   try {
@@ -24,7 +27,22 @@ export async function GET(req: NextRequest) {
       orderBy: { sort_order: "asc" },
     });
 
-    return NextResponse.json(products);
+    const productItems = products.map((product) => ({
+      ...product,
+      price_options: product.price_options as ProductItem["price_options"],
+    }));
+    // The admin screen intentionally reuses this endpoint. Authenticated
+    // editors need the raw draft catalog, while anonymous visitors see only
+    // content that is no longer identical to the repository demo seed.
+    const forcePublicView = req.nextUrl.searchParams.get("view") === "public";
+    const canViewDraft = !forcePublicView && (await requireAdmin(req));
+    const responseProducts = canViewDraft
+      ? productItems
+      : sanitizePublicProductItems(productItems);
+
+    return NextResponse.json(responseProducts, {
+      headers: { "Cache-Control": "no-store" },
+    });
   } catch (error) {
     console.error("GET /api/v1/products failed:", error);
     return NextResponse.json(

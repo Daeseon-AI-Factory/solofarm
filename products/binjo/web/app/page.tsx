@@ -8,9 +8,23 @@ import ReviewsSection from "@/components/brand/ReviewsSection";
 import OrderSection from "@/components/brand/OrderSection";
 import StickyOrderCTA from "@/components/brand/StickyOrderCTA";
 import YoutubeSection from "@/components/brand/YoutubeSection";
-import { FarmProfile, ProductItem, CalendarMonth, GalleryPhotoItem, ReviewItem } from "@/types";
+import {
+  getPublicSalesReadiness,
+  isSafePublicImageUrl,
+  sanitizePublicCalendarMonths,
+  sanitizePublicFarmProfile,
+  sanitizePublicProductItems,
+} from "@/lib/publicFarmProfile";
+import type {
+  FarmProfile,
+  GalleryPhotoItem,
+  ProductItem,
+  ReviewItem,
+} from "@/types";
 
-export const revalidate = 60; // ISR: revalidate every 60s
+// The production image is built without database secrets. Fetch current farm
+// data at request time after the runtime environment has been injected.
+export const dynamic = "force-dynamic";
 
 interface SectionConfig {
   id: string;
@@ -22,8 +36,8 @@ interface SectionConfig {
 
 const DEFAULT_SECTIONS: SectionConfig[] = [
   { id: "hero", label: "메인 배너", visible: true },
-  { id: "story", label: "농장 이야기", visible: true },
   { id: "products", label: "상품 소개", visible: true },
+  { id: "story", label: "농장 이야기", visible: true },
   { id: "calendar", label: "제철 달력", visible: true },
   { id: "youtube", label: "유튜브 영상", visible: true },
   { id: "gallery", label: "사진 갤러리", visible: true },
@@ -51,38 +65,57 @@ export default async function BrandPage() {
   if (!farm) {
     return (
       <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: "#FDFBF7" }}>
-        <p style={{ color: "#9B9B9B" }}>농장 정보를 불러오는 중...</p>
+        <p style={{ color: "#66705F" }}>농장 페이지를 준비하고 있습니다.</p>
       </div>
     );
   }
 
-  const farmProfile: FarmProfile = {
+  const farmProfile = sanitizePublicFarmProfile({
     ...farm,
     latitude: farm.latitude ? Number(farm.latitude) : null,
     longitude: farm.longitude ? Number(farm.longitude) : null,
     stats: farm.stats as FarmProfile["stats"],
-  };
+  });
 
-  const productItems: ProductItem[] = products.map((p) => ({
-    ...p,
-    price_options: p.price_options as ProductItem["price_options"],
-  }));
+  // Direct checkout is externally dependent and therefore needs both a
+  // build-time browser flag and a runtime server gate. A missing Toss key
+  // always closes the workflow instead of falling back to a fake success.
+  const directCheckoutEnabled =
+    process.env.NEXT_PUBLIC_ENABLE_DIRECT_CHECKOUT === "true" &&
+    process.env.ENABLE_DIRECT_CHECKOUT === "true" &&
+    Boolean(process.env.NEXT_PUBLIC_TOSS_CLIENT_KEY?.trim());
+  const productItems = sanitizePublicProductItems(
+    products.map((p) => ({
+      ...p,
+      price_options: p.price_options as ProductItem["price_options"],
+    }))
+  );
 
-  const calendarMonths: CalendarMonth[] = calendar.map((c) => ({
-    id: c.id,
-    month: c.month,
-    activities: c.activities,
-    available_products: c.available_products,
-    highlight: c.highlight,
-  }));
+  const calendarMonths = sanitizePublicCalendarMonths(
+    calendar.map((c) => ({
+      id: c.id,
+      month: c.month,
+      activities: c.activities,
+      available_products: c.available_products,
+      highlight: c.highlight,
+    }))
+  );
 
-  const galleryItems: GalleryPhotoItem[] = gallery.map((g) => ({
-    id: g.id,
-    image_url: g.image_url,
-    caption: g.caption,
-    taken_at: g.taken_at ? g.taken_at.toISOString() : null,
-    sort_order: g.sort_order,
-  }));
+  const salesReadiness = getPublicSalesReadiness(
+    farmProfile,
+    productItems,
+    directCheckoutEnabled
+  );
+
+  const galleryItems: GalleryPhotoItem[] = gallery
+    .filter((g) => isSafePublicImageUrl(g.image_url))
+    .map((g) => ({
+      id: g.id,
+      image_url: g.image_url,
+      caption: g.caption,
+      taken_at: g.taken_at ? g.taken_at.toISOString() : null,
+      sort_order: g.sort_order,
+    }));
 
   const reviewItems: ReviewItem[] = reviews.map((r) => ({
     id: r.id,
@@ -101,14 +134,37 @@ export default async function BrandPage() {
 
   // Map section IDs to their React components
   const sectionComponents: Record<string, React.ReactNode> = {
-    hero: <HeroSection farm={farmProfile} />,
+    hero: (
+      <HeroSection
+        farm={farmProfile}
+        salesMode={salesReadiness.mode}
+      />
+    ),
     story: <StorySection farm={farmProfile} />,
-    products: <ProductsSection products={productItems} />,
-    calendar: <CalendarSection calendar={calendarMonths} />,
-    youtube: farm.youtube_url ? <YoutubeSection youtubeUrl={farm.youtube_url} /> : null,
+    products: (
+      <ProductsSection
+        products={productItems}
+        directCheckoutEnabled={directCheckoutEnabled}
+        salesMode={salesReadiness.mode}
+      />
+    ),
+    calendar:
+      calendarMonths.length > 0 ? (
+        <CalendarSection calendar={calendarMonths} />
+      ) : null,
+    youtube: farmProfile.youtube_url ? (
+      <YoutubeSection youtubeUrl={farmProfile.youtube_url} />
+    ) : null,
     gallery: <GallerySection photos={galleryItems} />,
     reviews: <ReviewsSection reviews={reviewItems} />,
-    order: <OrderSection farm={farmProfile} products={productItems} />,
+    order: (
+      <OrderSection
+        farm={farmProfile}
+        products={productItems}
+        directCheckoutEnabled={directCheckoutEnabled}
+        salesMode={salesReadiness.mode}
+      />
+    ),
   };
 
   return (
@@ -116,16 +172,22 @@ export default async function BrandPage() {
       {sections
         .filter((s) => s.visible)
         .map((s) => {
-          const hasCustomBg = !!(s.bgColor || s.bgImage);
+          const sectionComponent = sectionComponents[s.id];
+          if (!sectionComponent) return null;
+
+          const safeBackgroundImage = isSafePublicImageUrl(s.bgImage ?? null)
+            ? s.bgImage
+            : null;
+          const hasCustomBg = !!(s.bgColor || safeBackgroundImage);
           return (
             <div
               key={s.id}
               style={{
                 // Custom background from admin layout editor
                 ...(s.bgColor ? { backgroundColor: s.bgColor } : {}),
-                ...(s.bgImage
+                ...(safeBackgroundImage
                   ? {
-                      backgroundImage: `url(${s.bgImage})`,
+                      backgroundImage: `url(${safeBackgroundImage})`,
                       backgroundSize: "cover",
                       backgroundPosition: "center",
                     }
@@ -134,13 +196,14 @@ export default async function BrandPage() {
               // Force child section to be transparent so the wrapper's bg shows through
               className={hasCustomBg ? "custom-bg-wrapper" : ""}
             >
-              {sectionComponents[s.id]}
+              {sectionComponent}
             </div>
           );
         })}
       <StickyOrderCTA
-        kakaoUrl={farm.kakao_chat_url}
-        phone={farm.phone}
+        kakaoUrl={farmProfile.kakao_chat_url}
+        phone={farmProfile.phone}
+        salesMode={salesReadiness.mode}
       />
     </main>
   );

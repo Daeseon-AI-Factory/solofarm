@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import AdminPage from "@/components/admin/AdminPage";
+import AdminNotice from "@/components/admin/AdminNotice";
 
 interface Analytics {
   total: number;
@@ -15,91 +17,143 @@ const CHANNEL_LABELS: Record<string, string> = {
 };
 
 const CHANNEL_COLORS: Record<string, string> = {
-  kakao: "#FEE500",
+  kakao: "#C6A900",
   phone: "#2D5016",
-  naver: "#03C75A",
+  naver: "#087F3F",
 };
 
 export default function AnalyticsAdminPage() {
   const [data, setData] = useState<Analytics | null>(null);
   const [days, setDays] = useState(30);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  useEffect(() => {
-    fetch(`/api/admin/inquiries?days=${days}`)
-      .then((r) => r.json())
-      .then(setData);
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/admin/inquiries?days=${days}`, { cache: "no-store" });
+      if (!response.ok) throw new Error(`연락 클릭 요청 실패 (HTTP ${response.status})`);
+      setData(await response.json());
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "연락 클릭 현황을 불러오지 못했습니다");
+    } finally {
+      setLoading(false);
+    }
   }, [days]);
 
-  return (
-    <div className="p-6 md:p-8 max-w-2xl">
-      <h1 className="text-xl font-bold mb-1" style={{ color: "#2D5016" }}>방문 통계</h1>
-      <p className="text-sm mb-6" style={{ color: "#6B6B6B" }}>주문 문의 클릭 수를 확인합니다</p>
+  useEffect(() => {
+    void load();
+  }, [load]);
 
-      <div className="flex gap-2 mb-8">
-        {[7, 30, 90].map((d) => (
+  return (
+    <AdminPage
+      title="연락 버튼 클릭"
+      description="고객 페이지에서 카카오·전화·스마트스토어 버튼을 누른 횟수입니다."
+      eyebrow="CONTACT CLICKS"
+      actions={
+        <button
+          type="button"
+          onClick={() => void load()}
+          disabled={loading}
+          className="min-h-12 w-full rounded-xl border bg-white px-4 text-sm font-bold disabled:opacity-50 sm:w-auto"
+          style={{ borderColor: "#CFD6CA", color: "#2D5016" }}
+        >
+          {loading ? "확인 중" : "새로고침"}
+        </button>
+      }
+    >
+      <AdminNotice tone="info" className="mb-5" title="실제 문의 건수와는 다릅니다">
+        같은 고객이 여러 번 누를 수 있고, 통화·카카오 대화 내용이나 주문 전환 여부는 저장하지 않습니다.
+      </AdminNotice>
+
+      {error && (
+        <AdminNotice
+          tone="error"
+          title="클릭 현황을 불러오지 못했습니다"
+          className="mb-5"
+          action={
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="min-h-11 rounded-xl border bg-white px-4 text-sm font-bold"
+              style={{ borderColor: "#C9806E" }}
+            >
+              다시 시도
+            </button>
+          }
+        >
+          {error}
+        </AdminNotice>
+      )}
+
+      <div className="mb-6 flex gap-2 overflow-x-auto pb-1" aria-label="조회 기간">
+        {[7, 30, 90].map((value) => (
           <button
-            key={d}
-            onClick={() => setDays(d)}
-            className="px-4 py-2 rounded-xl text-sm font-medium"
+            type="button"
+            key={value}
+            onClick={() => setDays(value)}
+            aria-pressed={days === value}
+            className="min-h-12 min-w-18 rounded-xl px-4 text-sm font-bold"
             style={{
-              backgroundColor: days === d ? "#2D5016" : "#FFFFFF",
-              color: days === d ? "#FFFFFF" : "#6B6B6B",
+              backgroundColor: days === value ? "#2D5016" : "#FFFFFF",
+              color: days === value ? "#FFFFFF" : "#4E5F48",
             }}
           >
-            {d}일
+            {value}일
           </button>
         ))}
       </div>
 
       {data ? (
         <>
-          <div className="rounded-2xl p-6 mb-6" style={{ backgroundColor: "#FFFFFF" }}>
-            <p className="text-xs" style={{ color: "#6B6B6B" }}>총 문의 클릭 ({days}일)</p>
-            <p className="text-4xl font-bold mt-1" style={{ color: "#2D5016" }}>{data.total}</p>
-          </div>
+          <section className="mb-5 rounded-2xl border bg-white p-5" style={{ borderColor: "#DEE3DA" }}>
+            <p className="text-sm font-semibold" style={{ color: "#66705F" }}>전체 클릭 · 최근 {days}일</p>
+            <p className="mt-2 text-4xl font-bold" style={{ color: "#1F3D12" }}>{data.total}</p>
+          </section>
 
-          <div className="grid grid-cols-3 gap-4 mb-6">
-            {Object.entries(data.by_channel).map(([channel, count]) => (
-              <div key={channel} className="rounded-2xl p-4 text-center" style={{ backgroundColor: "#FFFFFF" }}>
-                <div
-                  className="w-8 h-8 rounded-full mx-auto mb-2"
-                  style={{ backgroundColor: CHANNEL_COLORS[channel] ?? "#E5E2DB" }}
-                />
-                <p className="text-xs" style={{ color: "#6B6B6B" }}>{CHANNEL_LABELS[channel] ?? channel}</p>
-                <p className="text-2xl font-bold mt-1" style={{ color: "#1A1A1A" }}>{count}</p>
+          <section className="mb-7 grid grid-cols-1 gap-3 sm:grid-cols-3" aria-label="채널별 클릭 수">
+            {["kakao", "phone", "naver"].map((channel) => (
+              <div key={channel} className="rounded-2xl border bg-white p-4" style={{ borderColor: "#DEE3DA" }}>
+                <div className="flex items-center gap-2">
+                  <span className="h-3 w-3 rounded-full" style={{ backgroundColor: CHANNEL_COLORS[channel] }} aria-hidden="true" />
+                  <p className="text-sm font-semibold" style={{ color: "#66705F" }}>{CHANNEL_LABELS[channel]}</p>
+                </div>
+                <p className="mt-3 text-3xl font-bold" style={{ color: "#1F3D12" }}>{data.by_channel[channel] ?? 0}</p>
               </div>
             ))}
-          </div>
+          </section>
 
-          <h2 className="text-base font-semibold mb-4" style={{ color: "#1A1A1A" }}>최근 문의</h2>
-          <div className="space-y-2">
-            {data.recent.map((item) => (
-              <div key={item.id} className="flex items-center gap-3 p-3 rounded-xl" style={{ backgroundColor: "#FFFFFF" }}>
-                <div
-                  className="w-2 h-2 rounded-full flex-shrink-0"
-                  style={{ backgroundColor: CHANNEL_COLORS[item.channel] ?? "#E5E2DB" }}
-                />
-                <span className="text-sm font-medium" style={{ color: "#1A1A1A" }}>
-                  {CHANNEL_LABELS[item.channel] ?? item.channel}
-                </span>
-                {item.product_name && (
-                  <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: "#F5F1EC", color: "#6B6B6B" }}>
-                    {item.product_name}
-                  </span>
-                )}
-                <span className="text-xs ml-auto" style={{ color: "#9B9B9B" }}>
-                  {new Date(item.created_at).toLocaleDateString("ko-KR")}
-                </span>
-              </div>
-            ))}
-            {data.recent.length === 0 && (
-              <p className="text-center py-8" style={{ color: "#9B9B9B" }}>아직 문의가 없습니다</p>
-            )}
-          </div>
+          <section>
+            <h2 className="mb-3 text-lg font-bold" style={{ color: "#1F3D12" }}>최근 클릭</h2>
+            <div className="space-y-2">
+              {data.recent.map((item) => (
+                <div key={item.id} className="flex min-h-14 items-center gap-3 rounded-xl border bg-white p-3" style={{ borderColor: "#E3E6DF" }}>
+                  <span className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: CHANNEL_COLORS[item.channel] ?? "#8A9185" }} aria-hidden="true" />
+                  <span className="text-sm font-bold" style={{ color: "#34422F" }}>{CHANNEL_LABELS[item.channel] ?? item.channel}</span>
+                  {item.product_name && (
+                    <span className="rounded-full px-2 py-1 text-xs" style={{ backgroundColor: "#F1F3EE", color: "#66705F" }}>
+                      {item.product_name}
+                    </span>
+                  )}
+                  <time className="ml-auto text-xs" style={{ color: "#7A8175" }} dateTime={item.created_at}>
+                    {new Date(item.created_at).toLocaleString("ko-KR", { dateStyle: "short", timeStyle: "short" })}
+                  </time>
+                </div>
+              ))}
+              {data.recent.length === 0 && (
+                <p className="rounded-2xl border border-dashed py-10 text-center text-sm" style={{ borderColor: "#CDD3C8", color: "#66705F" }}>
+                  이 기간에는 연락 버튼 클릭이 없습니다.
+                </p>
+              )}
+            </div>
+          </section>
         </>
-      ) : (
-        <p style={{ color: "#9B9B9B" }}>불러오는 중...</p>
-      )}
-    </div>
+      ) : loading ? (
+        <div className="rounded-2xl border bg-white p-8 text-center text-sm" style={{ borderColor: "#DEE3DA", color: "#66705F" }}>
+          클릭 현황을 불러오고 있습니다...
+        </div>
+      ) : null}
+    </AdminPage>
   );
 }

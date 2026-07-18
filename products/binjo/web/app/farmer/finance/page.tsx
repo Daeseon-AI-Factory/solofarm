@@ -7,6 +7,7 @@ import {
   type DashboardData,
   type Transaction,
 } from "@/lib/farmerApi";
+import { RECEIPT_OCR_BUILD_ENABLED } from "@/lib/featureFlags";
 
 /**
  * Financial dashboard — farmer sees income, expenses, net profit at a glance.
@@ -214,22 +215,30 @@ export default function FinanceDashboardPage() {
       )}
 
       {/* Quick actions */}
-      <div className="grid grid-cols-2 gap-3">
-        <a
-          href="/farmer/receipt"
-          className="flex items-center justify-center gap-2 py-4 rounded-xl font-bold text-sm"
-          style={{ backgroundColor: "#EDF4E8", color: "#2D5016" }}
-        >
-          <span>&#128247;</span> 영수증 촬영
-        </a>
-        <a
-          href={getMonthlyPdfUrl(now.getFullYear(), now.getMonth() + 1)}
-          target="_blank"
+      <div className={`grid gap-3 ${RECEIPT_OCR_BUILD_ENABLED ? "grid-cols-2" : "grid-cols-1"}`}>
+        {RECEIPT_OCR_BUILD_ENABLED && (
+          <a
+            href="/farmer/receipt"
+            className="flex items-center justify-center gap-2 py-4 rounded-xl font-bold text-sm"
+            style={{ backgroundColor: "#EDF4E8", color: "#2D5016" }}
+          >
+            <span>&#128247;</span> 영수증 촬영
+          </a>
+        )}
+        <button
+          type="button"
+          onClick={async () => {
+            const url = await getMonthlyPdfUrl(
+              now.getFullYear(),
+              now.getMonth() + 1
+            );
+            window.open(url, "_blank");
+          }}
           className="flex items-center justify-center gap-2 py-4 rounded-xl font-bold text-sm"
           style={{ backgroundColor: "#F5F1EC", color: "#2D5016" }}
         >
           <span>&#128202;</span> 월간 리포트
-        </a>
+        </button>
       </div>
 
       {/* Recent transactions */}
